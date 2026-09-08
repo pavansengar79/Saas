@@ -55,6 +55,8 @@ const companySchema = new mongoose.Schema(
     company_phone: {
       type: String,
       required: true,
+      maxlength: 13,
+      match: /^[0-9]{1,13}$/,
     },
 
     logo_url: {

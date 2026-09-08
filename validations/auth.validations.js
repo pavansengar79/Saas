@@ -42,10 +42,11 @@ const createRoleSchema = Joi.object({
   slug: Joi.string()
     .trim()
     .lowercase()
-    .pattern(/^[a-z_]+$/)
+    // Custom role slugs can include numeric suffixes.
+    .pattern(/^[a-z0-9_]+$/)
     .required()
     .messages({
-      "string.pattern.base": "Slug must contain only lowercase letters and underscores"
+      "string.pattern.base": "Slug must contain only lowercase letters, numbers and underscores"
     }),
 
   description: Joi.string()
@@ -69,8 +70,8 @@ const createRoleSchema = Joi.object({
 // Update schema — all fields optional
 const updateRoleSchema = Joi.object({
   name: Joi.string().trim().min(2).max(50).optional(),
-  slug: Joi.string().trim().lowercase().pattern(/^[a-z_]+$/).optional()
-    .messages({ "string.pattern.base": "Slug must contain only lowercase letters and underscores" }),
+  slug: Joi.string().trim().lowercase().pattern(/^[a-z0-9_]+$/).optional()
+    .messages({ "string.pattern.base": "Slug must contain only lowercase letters, numbers and underscores" }),
   description: Joi.string().allow("").optional(),
   level: Joi.string().valid("org", "company", "unit").optional(),
   permissions: Joi.array().items(Joi.string().hex().length(24)).min(1).optional()

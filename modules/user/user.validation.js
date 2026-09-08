@@ -41,7 +41,7 @@ exports.updateUserSchema = Joi.object({
 
   phone: Joi.string()
     .trim()
-    .pattern(/^[0-9+\-\s]{7,15}$/)
+    .pattern(/^[0-9]{7,13}$/)
     .allow("", null),
 
   roleId: objectId,
