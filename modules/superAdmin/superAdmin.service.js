@@ -31,11 +31,20 @@ const generateTempPassword = () =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.getAllTenants = async (query) => {
-  const { status, search, page = 1, limit = 20 } = query;
+  const { status, search, orgName, page = 1, limit = 20 } = query;
 
   const filter = { is_deleted: false };
 
-  if (status) filter.status = status;
+  if (status) filter.status = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+
+  if (orgName) {
+    // Treat the organization name as a literal substring, not a regex pattern.
+    const matchingOrgs = await Organization.find({
+      name: { $regex: orgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" },
+      is_deleted: false
+    }).select("customer_id").lean();
+    filter._id = { $in: matchingOrgs.map(org => org.customer_id) };
+  }
 
   if (search) {
     filter.$or = [
@@ -63,7 +72,7 @@ exports.getAllTenants = async (query) => {
   if (search && orgFilterIds.length > 0) {
     // Search in Customer fields OR match customer_id from Organization
     finalFilter = {
-      is_deleted: false,
+      ...filter,
       $or: [
         { business_name:  { $regex: search, $options: "i" } },
         { contact_email: { $regex: search, $options: "i" } },

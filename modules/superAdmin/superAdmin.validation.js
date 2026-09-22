@@ -13,12 +13,13 @@ exports.tenantListSchema = Joi.object({
     }),
 
   status: Joi.string()
-    .valid("ACTIVE", "SUSPENDED", "INACTIVE")
+    .valid("Active", "Pending", "Suspended", "Inactive").insensitive()
     .messages({
-      "any.only": "Status sirf ACTIVE, SUSPENDED, ya INACTIVE ho sakta hai"
+      "any.only": "Status sirf Active, Pending, Suspended, ya Inactive ho sakta hai"
     }),
 
   search: Joi.string().trim().max(100),
+  orgName: Joi.string().trim().max(100),
 
   page:  Joi.number().integer().min(1).default(1),
   limit: Joi.number().integer().min(1).max(100).default(20),
