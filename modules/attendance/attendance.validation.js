@@ -17,6 +17,9 @@ exports.getMyAttendance = Joi.object({
       "any.required":         "month query param required hai (e.g. 2026-04)",
       "string.pattern.base":  "month format YYYY-MM hona chahiye (e.g. 2026-04)",
     }),
+  orgId: objectId.optional(),
+  companyId: objectId.optional(),
+  unit_id: objectId.optional(),
 });
 
 // ─── POST /punch-in ───────────────────────────────────────────
@@ -161,6 +164,9 @@ exports.getSummary = Joi.object({
       "string.pattern.base": "month format YYYY-MM hona chahiye",
     }),
 
+  orgId: objectId.optional(),
+  companyId: objectId.optional(),
+  unit_id: objectId.optional(),
   employeeId: objectId.optional(),
 });
 

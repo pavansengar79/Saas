@@ -43,6 +43,15 @@ const parseMonth = (monthStr) => {
   return { start, end, year, month };
 };
 
+const buildMyAttendanceFilter = (employee, start, end) => ({
+  org_id: employee.org_id,
+  company_id: employee.company_id,
+  unit_id: employee.unit_id,
+  employeeId: employee._id,
+  date: { $gte: start, $lt: end },
+  isDeleted: false,
+});
+
 /**
  * Normalize any date to UTC midnight (date-only comparison)
  */
@@ -690,12 +699,7 @@ exports.getMyAttendance = async (query, user) => {
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
 
   // ── 2. Fetch records for the month ───────────────────────────
-  const records = await Attendance.find({
-    org_id:     user.orgId,
-    company_id: user.companyId,
-    employeeId: employee._id,
-    date:       { $gte: start, $lt: end },
-  })
+  const records = await Attendance.find(buildMyAttendanceFilter(employee, start, end))
     .sort({ date: 1 })
     .select("-__v -isDeleted");
 
@@ -805,11 +809,7 @@ exports.getMySummary = async (query, user) => {
   const agg = await Attendance.aggregate([
     {
       $match: {
-        org_id:     employee.org_id,
-        company_id: employee.company_id,
-        employeeId: employee._id,
-        date:       { $gte: start, $lt: end },
-        isDeleted:  false,
+        ...buildMyAttendanceFilter(employee, start, end),
       },
     },
     {
