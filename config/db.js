@@ -107,6 +107,7 @@ const connectDB = async () => {
         )
       }
     });
+    
   }
 
   // ── Seeders — run once per warm instance, not on every request ──
