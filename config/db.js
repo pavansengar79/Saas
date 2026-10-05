@@ -108,6 +108,7 @@ const connectDB = async () => {
         )
       }
     });
+    
   }
 
   // ── Seeders removed — run manually via scripts/seed.js ───────────
