@@ -18,6 +18,33 @@ const { sendEmail } = require("../../utils/email/email");
 const inviteTemplate = require("../../utils/email/templates/inviteEmail");
 
 const { invalidateEmployeeCache } = require("../../utils/policyResolver");
+const Module = require("../module/models/module.model");
+
+// ── Plan gate: company management ─────────────────────────
+// Company-level roles (company_admin, company_hr_manager) need the plan to
+// include company management — the "organisation" module (Enterprise).
+// plan_snapshot.modules holds slugs when created by tenant/superAdmin, but
+// ObjectIds when set by a plan change, so both forms are accepted.
+const assertPlanAllowsCompanyRoles = async (orgId, session = null) => {
+  const query = Subscription.findOne({ org_id: orgId, is_active: true })
+    .select("plan_snapshot.modules plan_snapshot.structure_level");
+  if (session) query.session(session);
+  const subscription = await query.lean();
+
+  const snapshot = subscription?.plan_snapshot || {};
+  if (snapshot.structure_level === "enterprise") return;
+
+  const planModules = (snapshot.modules || []).map(String);
+  if (planModules.includes("organisation")) return;
+
+  const orgModuleDoc = await Module.findOne({ slug: "organisation" }).select("_id").lean();
+  if (orgModuleDoc && planModules.includes(String(orgModuleDoc._id))) return;
+
+  throw new AppError(
+    "Your current plan does not include company management. Please upgrade your plan to add company-level users.",
+    403
+  );
+};
 
 // ── Scope filter ──────────────────────────────────────────
 const buildScopeFilter = (user) => {
@@ -53,7 +80,7 @@ exports.inviteUser = async (data, currentUser) => {
     const existingUser = await User.findOne({
       email,
       org_id: currentUser.orgId,
-      isDeleted: false,
+      is_deleted: false,
     }).session(session);
 
     if (existingUser) {
@@ -72,31 +99,16 @@ exports.inviteUser = async (data, currentUser) => {
       throw new AppError("Role not found or not accessible", 404);
     }
 
-     if (["company_admin", "unit_admin"].includes(role.slug)) {
-      const scopeFilter = {
-        roleId:     roleId,
-        org_id:     currentUser.orgId,
-        status:     "ACTIVE",
-        is_deleted: false,
-      };
-      if (role.slug === "company_admin") scopeFilter.company_id = company_id;
-      if (role.slug === "unit_admin")    scopeFilter.unit_id    = unit_id;
-
-      const previousAdmins = await User.find(scopeFilter).session(session);
-
-      for (const prevAdmin of previousAdmins) {
-        prevAdmin.status    = "INACTIVE";
-        prevAdmin.updatedBy = currentUser.userId;
-        await prevAdmin.save({ session });
-      }
-    }
-
     const hierarchy = { org: 3, company: 2, unit: 1 };
     const currentLevel = hierarchy[currentUser.level] || 0;
     const targetLevel = hierarchy[role.level] || 0;
 
     if (targetLevel > currentLevel) {
       throw new AppError(`You cannot assign ${role.level} level role`, 403);
+    }
+
+    if (role.level === "company") {
+      await assertPlanAllowsCompanyRoles(currentUser.orgId, session);
     }
 
     let resolvedDepartmentId = null;
@@ -339,13 +351,8 @@ exports.inviteUser = async (data, currentUser) => {
 exports.getUsers = async (query, currentUser) => {
   const { page = 1, limit = 10, search, status, roleId, departmentId } = query;
 
-  const scopeFilter = buildScopeFilter(currentUser);
-  if (currentUser.level === 'company') {
-    delete scopeFilter.unit_id;
-  }
-
   const filter = {
-    ...scopeFilter,
+    ...buildScopeFilter(currentUser),
     is_deleted: false,
   };
 
@@ -360,13 +367,23 @@ exports.getUsers = async (query, currentUser) => {
     filter.roleId = { $ne: employeeRole._id };
   }
 
-  // Restrict the list to administrative roles visible at the caller's level.
+  // ── SECURITY: Role Level Hierarchy Filtering - STRICT LEVEL ISOLATION ──
+  // org_admin → can see/edit org + company (NOT unit)
+  // company_admin → can see/edit ONLY company (NOT org, NOT unit)
+  // unit_admin → can see/edit ONLY unit
+  const hierarchy = { org: 1, company: 2, unit: 3 };
+  const currentUserLevelOrder = hierarchy[currentUser.level] || 3;
+  
+  // Determine accessible levels - STRICT ISOLATION
   let accessibleRoleLevels;
   if (currentUser.level === 'org') {
+    // org_admin can manage org + company (NOT unit)
     accessibleRoleLevels = ['org', 'company'];
   } else if (currentUser.level === 'company') {
-    accessibleRoleLevels = ['company', 'unit'];
+    // company_admin can ONLY manage company (NOT org, NOT unit)
+    accessibleRoleLevels = ['company'];
   } else {
+    // unit_admin can only manage their own level
     accessibleRoleLevels = [currentUser.level];
   }
     
@@ -408,10 +425,7 @@ exports.getUsers = async (query, currentUser) => {
     }
   }
 
-  if (search) {
-    const searchPattern = { $regex: search, $options: "i" };
-    filter.$or = [{ name: searchPattern }, { email: searchPattern }];
-  }
+  if (search) filter.email  = { $regex: search, $options: "i" };
   if (status) filter.status = status;
   
   // Specific roleId filter - but still exclude employee
@@ -443,55 +457,46 @@ exports.getUsers = async (query, currentUser) => {
       .select("-password -refreshTokens -mfaSecret -mfaTempSecret -mfaBackupCodes -loginAttempts -blockedAt -__v")
       .populate("roleId", "name slug level")
       .populate("company_id", "company_name logo_url")
-      .populate("unit_id", "name")
+      .populate("unit_id", "unit_name")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit)),
     User.countDocuments(filter),
   ]);
 
-  // Match linked employees, including existing records created before the User link.
+  // Department + profilePhoto attach from Employee model (for unit-level users)
   const userIds   = users.map((u) => u._id);
-  const unitUserEmails = users
-    .filter((user) => user.unit_id && user.email)
-    .map((user) => user.email.toLowerCase());
   const employees = await Employee.find({
-    ...scopeFilter,
+    userId:    { $in: userIds },
+    ...buildScopeFilter(currentUser),
     isDeleted: false,
-    $or: [
-      { userId: { $in: userIds } },
-      { userId: null, email: { $in: unitUserEmails } },
-    ],
-  }).select("userId email unit_id departmentId profilePhoto").populate("departmentId", "name");
+  }).select("userId departmentId profilePhoto").populate("departmentId", "name");
 
   const deptMap = {};
   const photoMap = {};
-  const unlinkedEmployeesByEmail = new Map();
   employees.forEach((e) => {
     if (e.userId) {
       deptMap[e.userId.toString()] = e.departmentId;
+      // Store profilePhoto from Employee (unit-level users store photo here)
       if (e.profilePhoto) {
         photoMap[e.userId.toString()] = e.profilePhoto;
       }
-    } else if (e.email && e.unit_id) {
-      unlinkedEmployeesByEmail.set(`${e.unit_id}:${e.email.toLowerCase()}`, e);
     }
   });
 
   const usersWithDept = users.map((u) => {
     const obj = u.toObject();
     const userLevel = obj.roleId?.level;
-    const unlinkedEmployee = userLevel === 'unit' && obj.unit_id && obj.email
-      ? unlinkedEmployeesByEmail.get(`${obj.unit_id._id}:${obj.email.toLowerCase()}`)
-      : null;
-    const profilePhoto = userLevel === 'unit'
-      ? photoMap[u._id.toString()] || unlinkedEmployee?.profilePhoto || obj.profilePhoto
+    
+    // For unit-level users, use profilePhoto from Employee collection if available
+    const profilePhoto = (userLevel === 'unit' && photoMap[u._id.toString()]) 
+      ? photoMap[u._id.toString()] 
       : obj.profilePhoto;
     
     return {
       ...obj,
-      profilePhoto,
-      department: deptMap[u._id.toString()] || unlinkedEmployee?.departmentId || null,
+      profilePhoto, // Override with Employee photo for unit users
+      department: deptMap[u._id.toString()] || null,
       company: obj.company_id || null,
       unit: obj.unit_id || null,
     };
@@ -514,14 +519,9 @@ exports.getUsers = async (query, currentUser) => {
 // ─────────────────────────────────────────────────────────────
 exports.updateUser = async (id, data, currentUser) => {
 
-  const targetScopeFilter = buildScopeFilter(currentUser);
-  if (currentUser.level === "company") {
-    delete targetScopeFilter.unit_id;
-  }
-
   const user = await User.findOne({
     _id:       id,
-    ...targetScopeFilter,
+    ...buildScopeFilter(currentUser),
     is_deleted: false,
   });
   if (!user) throw new AppError("User not found", 404);
@@ -530,7 +530,6 @@ exports.updateUser = async (id, data, currentUser) => {
   const roleChanged = data.roleId &&
     data.roleId.toString() !== user.roleId?.toString();
   const fromRoleId  = user.roleId || null;
-  let newRole;
 
   // Self-service profile edits are allowed, but privilege and account-state
   // changes must be performed by another authorized administrator.
@@ -544,14 +543,7 @@ exports.updateUser = async (id, data, currentUser) => {
   }
 
   if (roleChanged) {
-    newRole = await Role.findOne({
-      _id: data.roleId,
-      isDeleted: false,
-      $or: [
-        { org_id: currentUser.orgId },
-        { org_id: null, isSystem: true },
-      ],
-    }).select("slug level").lean();
+    const newRole = await Role.findById(data.roleId).select("slug level").lean();
     
     if (!newRole) {
       throw new AppError("Role not found", 404);
@@ -559,50 +551,48 @@ exports.updateUser = async (id, data, currentUser) => {
     
     // ── SECURITY: Check role hierarchy - STRICT LEVEL ISOLATION ──
     const hierarchy = { org: 1, company: 2, unit: 3 };
-    const currentUserLevelOrder = hierarchy[currentUser.level];
-    const targetLevelOrder = hierarchy[newRole.level];
+    const currentUserLevelOrder = hierarchy[currentUser.level] || 3;
+    const targetLevelOrder = hierarchy[newRole.level] || 3;
     
     // Get current target user's level
     const userRole = await Role.findById(user.roleId).select('level').lean();
     const userCurrentLevel = userRole?.level || 'unit';
-    const userCurrentLevelOrder = hierarchy[userCurrentLevel];
-
-    if (!currentUserLevelOrder || !targetLevelOrder || !userCurrentLevelOrder) {
-      throw new AppError("Role level is invalid or unsupported", 403);
-    }
+    const userCurrentLevelOrder = hierarchy[userCurrentLevel] || 3;
     
     // ── CRITICAL: Cannot edit users at higher level ──
     if (userCurrentLevelOrder < currentUserLevelOrder) {
       throw new AppError(`You cannot edit users with ${userCurrentLevel} level (parent hierarchy)`, 403);
     }
     
-    if (
-      targetLevelOrder < currentUserLevelOrder ||
-      targetLevelOrder > userCurrentLevelOrder
-    ) {
-      throw new AppError(
-        "Role changes must stay within your authority and cannot downgrade the user's level",
-        403
-      );
+    // ── CRITICAL: Cannot promote users to parent level ──
+    if (targetLevelOrder < userCurrentLevelOrder) {
+      throw new AppError(`Cannot promote user from ${userCurrentLevel} to ${newRole.level} level (child cannot become parent)`, 403);
+    }
+    
+    // Determine allowed target levels - STRICT ISOLATION
+    let allowedTargetLevels;
+    if (currentUser.level === 'org') {
+      // org_admin can assign org or company roles (NOT unit)
+      allowedTargetLevels = ['org', 'company'];
+    } else if (currentUser.level === 'company') {
+      // company_admin can ONLY assign company roles (NOT org, NOT unit)
+      allowedTargetLevels = ['company'];
+    } else {
+      // unit_admin can only assign their own level
+      allowedTargetLevels = [currentUser.level];
+    }
+    
+    if (!allowedTargetLevels.includes(newRole.level)) {
+      throw new AppError(`You cannot assign ${newRole.level} level role`, 403);
+    }
+    
+    // Can ONLY edit users with roles within allowed levels
+    if (!allowedTargetLevels.includes(userCurrentLevel)) {
+      throw new AppError(`You cannot edit users with ${userCurrentLevel || 'unknown'} level role`, 403);
     }
 
-    if (newRole && ["company_admin", "unit_admin"].includes(newRole.slug)) {
-      const scopeFilter = {
-        roleId:     data.roleId,
-        org_id:     currentUser.orgId,
-        status:     "ACTIVE",
-        is_deleted: false,
-        _id:        { $ne: user._id },   // don't touch the user being updated
-      };
-      if (newRole.slug === "company_admin") scopeFilter.company_id = user.company_id;
-      if (newRole.slug === "unit_admin")    scopeFilter.unit_id    = user.unit_id;
-
-      const previousAdmins = await User.find(scopeFilter);
-      for (const prevAdmin of previousAdmins) {
-        prevAdmin.status    = "INACTIVE";
-        prevAdmin.updatedBy = currentUser.userId;
-        await prevAdmin.save();
-      }
+    if (newRole.level === "company") {
+      await assertPlanAllowsCompanyRoles(currentUser.orgId);
     }
   }
 
@@ -611,15 +601,7 @@ exports.updateUser = async (id, data, currentUser) => {
   if (data.lastName) user.lastName = data.lastName;
   if (data.phone)    user.phone    = data.phone;
   if (data.status)   user.status   = data.status;
-  if (roleChanged) {
-    user.roleId = data.roleId;
-    if (newRole.level === "org") {
-      user.company_id = null;
-      user.unit_id = null;
-    } else if (newRole.level === "company") {
-      user.unit_id = null;
-    }
-  }
+  if (roleChanged)   user.roleId   = data.roleId;
 
   // T-26 — Track blockedAt for JWT invalidation
   if (data.status === "BLOCKED" && !user.blockedAt) {
@@ -763,7 +745,7 @@ exports.deleteUser = async (id, currentUser) => {
     throw new AppError("You cannot delete your own account", 400);
   }
 
-  user.is_deleted = true;
+  user.isDeleted = true;
   user.status    = "INACTIVE";
   user.updatedBy = currentUser.userId;
   await user.save();

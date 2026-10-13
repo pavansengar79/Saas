@@ -43,95 +43,6 @@ const parseMonth = (monthStr) => {
   return { start, end, year, month };
 };
 
-const buildMyAttendanceFilter = (employee, start, end) => ({
-  org_id: employee.org_id,
-  company_id: employee.company_id,
-  unit_id: employee.unit_id,
-  employeeId: employee._id,
-  date: { $gte: start, $lt: end },
-  isDeleted: false,
-});
-
-const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
-  const moment = require("moment-timezone");
-  const timezone = "Asia/Kolkata";
-  const employees = await Employee.find({
-    org_id: filter.org_id,
-    company_id: filter.company_id,
-    ...(filter.unit_id && { unit_id: filter.unit_id }),
-    ...employeeScope,
-    status: "ACTIVE",
-    isDeleted: false,
-  }).select("_id");
-  const scopedIds = new Set(employees.map(employee => String(employee._id)));
-  const attendanceFilter = { ...filter };
-  delete attendanceFilter.status;
-  const records = await Attendance.find(attendanceFilter).select("employeeId date status");
-  const overview = { present: 0, late: 0, onLeave: 0, absent: 0 };
-  const recordedDays = new Set();
-
-  for (const record of records) {
-    const employeeId = String(record.employeeId?._id || record.employeeId);
-    if (!scopedIds.has(employeeId)) continue;
-    recordedDays.add(`${employeeId}:${moment(record.date).tz(timezone).format("YYYY-MM-DD")}`);
-    if (statusFilter && record.status !== statusFilter) continue;
-    if (["PRESENT", "LATE", "WFH"].includes(record.status)) overview.present++;
-    if (record.status === "LATE") overview.late++;
-    if (record.status === "ON_LEAVE") overview.onLeave++;
-    if (record.status === "ABSENT") overview.absent++;
-  }
-
-  if (!statusFilter || ["ABSENT", "ON_LEAVE"].includes(statusFilter)) {
-    const lastDate = filter.date.$lt
-      ? moment(filter.date.$lt).subtract(1, "millisecond")
-      : moment(filter.date.$lte);
-    const end = moment.min(lastDate.tz(timezone), moment().tz(timezone)).startOf("day");
-    const [holidays, leaves] = await Promise.all([
-      Holiday.find({
-        org_id: filter.org_id,
-        company_id: filter.company_id,
-        ...(filter.unit_id && { $or: [{ unit_id: filter.unit_id }, { unit_id: null }] }),
-        date: filter.date,
-        isActive: true,
-        isDeleted: false,
-      }).select("date"),
-      LeaveRequest.find({
-        org_id: filter.org_id,
-        company_id: filter.company_id,
-        employeeId: { $in: employees.map(employee => employee._id) },
-        status: "APPROVED",
-        startDate: { $lte: lastDate.toDate() },
-        endDate: { $gte: filter.date.$gte },
-      }).select("employeeId startDate endDate"),
-    ]);
-    const holidayDates = new Set(holidays.map(holiday => moment(holiday.date).tz(timezone).format("YYYY-MM-DD")));
-    const leaveDays = new Set();
-    for (const leave of leaves) {
-      const leaveEnd = moment.min(moment(leave.endDate).tz(timezone), end);
-      for (const day = moment.max(moment(leave.startDate).tz(timezone).startOf("day"), moment(filter.date.$gte).tz(timezone).startOf("day"));
-        day.isSameOrBefore(leaveEnd); day.add(1, "day")) {
-        leaveDays.add(`${leave.employeeId}:${day.format("YYYY-MM-DD")}`);
-      }
-    }
-    for (const day = moment(filter.date.$gte).tz(timezone).startOf("day"); day.isSameOrBefore(end); day.add(1, "day")) {
-      if (day.isoWeekday() > 5) continue;
-      const dateKey = day.format("YYYY-MM-DD");
-      if (holidayDates.has(dateKey)) continue;
-      for (const employeeId of scopedIds) {
-        const employeeDay = `${employeeId}:${dateKey}`;
-        if (recordedDays.has(employeeDay)) continue;
-        if (leaveDays.has(employeeDay)) {
-          if (!statusFilter || statusFilter === "ON_LEAVE") overview.onLeave++;
-        } else if (!statusFilter || statusFilter === "ABSENT") {
-          overview.absent++;
-        }
-      }
-    }
-  }
-
-  return overview;
-};
-
 /**
  * Normalize any date to UTC midnight (date-only comparison)
  */
@@ -779,7 +690,12 @@ exports.getMyAttendance = async (query, user) => {
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
 
   // ── 2. Fetch records for the month ───────────────────────────
-  const records = await Attendance.find(buildMyAttendanceFilter(employee, start, end))
+  const records = await Attendance.find({
+    org_id:     user.orgId,
+    company_id: user.companyId,
+    employeeId: employee._id,
+    date:       { $gte: start, $lt: end },
+  })
     .sort({ date: 1 })
     .select("-__v -isDeleted");
 
@@ -889,7 +805,11 @@ exports.getMySummary = async (query, user) => {
   const agg = await Attendance.aggregate([
     {
       $match: {
-        ...buildMyAttendanceFilter(employee, start, end),
+        org_id:     employee.org_id,
+        company_id: employee.company_id,
+        employeeId: employee._id,
+        date:       { $gte: start, $lt: end },
+        isDeleted:  false,
       },
     },
     {
@@ -1044,16 +964,11 @@ exports.getAllAttendance = async (query, user) => {
     Attendance.countDocuments(filter),
   ]);
 
-  const overview = await getAttendanceOverview(filter, {
-    ...(employeeId ? { _id: employeeId } : departmentId ? { departmentId } : {}),
-  }, status);
-
   return {
     page:    Number(page),
     limit:   Number(limit),
     total,
     records,
-    overview,
   };
 };
 
@@ -1130,88 +1045,131 @@ exports.getTeamAttendance = async (query, user) => {
     filter.employeeId = { $in: teamIds };
   }
 
-  if (status) filter.status = status;
+  // ── 4. Fetch ALL records in range (status filter + pagination applied
+  //       after absent days are filled in, so counts stay correct) ─────────
+  const dbRecords = await Attendance.find(filter)
+    .populate("employeeId", "name employeeId email departmentId profilePhoto")
+    .sort({ date: -1, createdAt: -1 })
+    .select("-__v -isDeleted")
+    .lean();
 
-  const skip = (page - 1) * limit;
+  // ── 5. Fill in ABSENT / ON_LEAVE for working days with no record ─────────
+  // The nightly auto-absent job only writes records for past days (and may
+  // not run at all on serverless), so absent employees usually have NO
+  // attendance document. Without this step they never show up or get counted.
+  const dayKey = (d) => moment(d).tz(ORG_TZ).format("YYYY-MM-DD");
 
-  const [records, total] = await Promise.all([
-    Attendance.find(filter)
-      .populate("employeeId", "name employeeId email departmentId profilePhoto")
-      .sort({ date: -1, createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .select("-__v -isDeleted"),
-    Attendance.countDocuments(filter),
-  ]);
+  const rangeStart  = moment(filter.date.$gte).tz(ORG_TZ).startOf("day");
+  const rangeEndRaw = filter.date.$lte || new Date(filter.date.$lt.getTime() - 1);
+  const todayOrg    = moment().tz(ORG_TZ).endOf("day");
+  const rangeEnd    = moment.min(moment(rangeEndRaw).tz(ORG_TZ), todayOrg);
 
-  const overview = await getAttendanceOverview(filter, {
-    _id: employeeId || { $in: teamIds },
-  }, status);
+  const targetIds = employeeId ? [employeeId] : teamIds;
+  const employees = await Employee.find({
+    _id:        { $in: targetIds },
+    org_id:     user.orgId,
+    company_id: user.companyId,
+    status:     "ACTIVE",
+    isDeleted:  false,
+  }).select("_id name employeeId email departmentId profilePhoto unit_id joiningDate").lean();
 
-  // ── If filtering by single day (today/yesterday), show ALL team members ────────
-  // If no records exist for an employee on a working day, mark as ABSENT
-  if (startDate && endDate && startDate === endDate) {
-    const filterStart = new Date(startDate);
-    filterStart.setHours(0, 0, 0, 0);
-    const filterEnd = new Date(endDate);
-    filterEnd.setHours(23, 59, 59, 999);
-    
-    // Check if it's a single day filter
-    const isSingleDay = filterStart.getTime() === filterEnd.getTime() || 
-                        (filterEnd - filterStart) === 86399999;
-    
-    if (isSingleDay) {
-      const dayOfWeek = filterStart.getDay();
-      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-      
-      // If not a weekend, find employees without attendance records
-      if (!isWeekend) {
-        // Get all team members with full details
-        const allTeamMembers = await Employee.find({
-          _id: { $in: teamIds },
-          org_id: user.orgId,
-          company_id: user.companyId,
-          status: "ACTIVE",
-          isDeleted: false,
-        }).select("_id name employeeId email departmentId profilePhoto");
-        
-        // Find which employees already have attendance records
-        const employeesWithRecords = new Set(records.map(r => r.employeeId?._id?.toString() || r.employeeId?.toString()));
-        
-        // Create ABSENT records for missing employees
-        const absentRecords = allTeamMembers
-          .filter(emp => !employeesWithRecords.has(emp._id.toString()))
-          .map(emp => ({
-            _id: `absent-${emp._id}`,
-            employeeId: emp,
-            date: filterStart,
-            status: 'ABSENT',
-            checkIn: null,
-            checkOut: null,
-            workingHours: 0,
-            isWFH: false,
-            remarks: 'Auto-marked absent (no attendance record)',
-            isAutoMarked: true,
-          }));
-        
-        // Combine existing records with absent records
-        return {
-          page: Number(page),
-          limit: Number(limit),
-          total: records.length + absentRecords.length,
-          records: [...records, ...absentRecords],
-          overview,
-        };
+  const synthetic = [];
+
+  if (employees.length && rangeStart.isSameOrBefore(rangeEnd)) {
+    const empIds = employees.map(e => e._id);
+
+    const [holidays, leaves] = await Promise.all([
+      Holiday.find({
+        org_id:     user.orgId,
+        company_id: user.companyId,
+        date:       { $gte: rangeStart.toDate(), $lte: rangeEnd.toDate() },
+        isDeleted:  false,
+      }).select("date unit_id").lean(),
+      LeaveRequest.find({
+        employeeId: { $in: empIds },
+        status:     "APPROVED",
+        startDate:  { $lte: rangeEnd.toDate() },
+        endDate:    { $gte: rangeStart.toDate() },
+        isDeleted:  { $ne: true },
+      }).select("employeeId startDate endDate").lean(),
+    ]);
+
+    // date → Set of unit ids ("ALL" = company-wide holiday)
+    const holidayMap = new Map();
+    for (const h of holidays) {
+      const k = dayKey(h.date);
+      if (!holidayMap.has(k)) holidayMap.set(k, new Set());
+      holidayMap.get(k).add(h.unit_id ? String(h.unit_id) : "ALL");
+    }
+    const isHoliday = (k, unitId) => {
+      const set = holidayMap.get(k);
+      return !!set && (set.has("ALL") || (unitId && set.has(String(unitId))));
+    };
+
+    const leavesByEmp = new Map();
+    for (const l of leaves) {
+      const id = String(l.employeeId);
+      if (!leavesByEmp.has(id)) leavesByEmp.set(id, []);
+      leavesByEmp.get(id).push({ from: dayKey(l.startDate), to: dayKey(l.endDate) });
+    }
+
+    const existing = new Set(
+      dbRecords.map(r => `${String(r.employeeId?._id || r.employeeId)}_${dayKey(r.date)}`)
+    );
+
+    for (let day = rangeStart.clone(); day.isSameOrBefore(rangeEnd, "day"); day.add(1, "day")) {
+      const dow = day.day();
+      if (dow === 0 || dow === 6) continue;              // weekend (same rule as auto-absent job)
+      const k = day.format("YYYY-MM-DD");
+
+      for (const emp of employees) {
+        const id = String(emp._id);
+        if (existing.has(`${id}_${k}`)) continue;
+        if (emp.joiningDate && dayKey(emp.joiningDate) > k) continue;
+        if (isHoliday(k, emp.unit_id)) continue;
+
+        const onLeave = (leavesByEmp.get(id) || []).some(l => l.from <= k && k <= l.to);
+        const { unit_id, joiningDate, ...empInfo } = emp;
+
+        synthetic.push({
+          _id:          `${onLeave ? "leave" : "absent"}-${id}-${k}`,
+          employeeId:   empInfo,
+          date:         moment.tz(k, ORG_TZ).toDate(),
+          status:       onLeave ? "ON_LEAVE" : "ABSENT",
+          checkIn:      null,
+          checkOut:     null,
+          workingHours: 0,
+          isWFH:        false,
+          remarks:      onLeave ? "On approved leave" : "Auto-marked absent (no attendance record)",
+          isAutoMarked: true,
+        });
       }
     }
   }
 
+  // ── 6. Merge, count, filter, paginate ────────────────────────────────────
+  const allRecords = [...dbRecords, ...synthetic]
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const summary = {
+    total:   allRecords.length,
+    present: allRecords.filter(r => ["PRESENT", "LATE", "WFH"].includes(r.status)).length,
+    absent:  allRecords.filter(r => r.status === "ABSENT").length,
+    late:    allRecords.filter(r => r.status === "LATE").length,
+    wfh:     allRecords.filter(r => r.status === "WFH").length,
+    halfDay: allRecords.filter(r => r.status === "HALF_DAY").length,
+    onLeave: allRecords.filter(r => r.status === "ON_LEAVE").length,
+  };
+
+  const filtered = status ? allRecords.filter(r => r.status === status) : allRecords;
+  const skip = (Number(page) - 1) * Number(limit);
+
   return {
     page:    Number(page),
     limit:   Number(limit),
-    total,
-    records,
-    overview,
+    total:   filtered.length,
+    summary,
+    records: filtered.slice(skip, skip + Number(limit)),
   };
 };
 
@@ -1294,7 +1252,7 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
   const newCheckIn  = checkIn  ? new Date(checkIn)  : record.checkIn;
   const newCheckOut = checkOut ? new Date(checkOut) : record.checkOut;
 
-  if (newCheckIn && newCheckOut && newCheckOut <= newCheckIn) {
+  if (newCheckIn && newCheckOut && newCheckOut < newCheckIn) {
     throw new AppError("Check-out time, check-in se pehle nahi ho sakta", 400);
   }
 
@@ -1308,21 +1266,6 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
 
   if (checkIn)  record.checkIn  = new Date(checkIn);
   if (checkOut) record.checkOut = new Date(checkOut);
-
-  if (checkIn || checkOut) {
-    if (record.checkIn && record.checkOut) {
-      const attendancePolicy = await resolveAttendancePolicy(
-        String(record.employeeId), String(record.company_id), String(record.unit_id)
-      );
-      record.workingHours = parseFloat(((record.checkOut - record.checkIn) / (1000 * 60 * 60)).toFixed(2));
-      record.overtimeHours = calculatePolicyOvertime(
-        record.workingHours - (record.standardHours || 8), attendancePolicy.overtime
-      );
-    } else {
-      record.workingHours = null;
-      record.overtimeHours = 0;
-    }
-  }
 
   await record.save(); // pre-save recalculates workingHours
   await record.populate("employeeId", "name employeeId email departmentId profilePhoto");
