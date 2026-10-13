@@ -55,6 +55,7 @@ const mongoose = require('mongoose');
 // const { seedPlans }       = require('../seeders/plan.Seeder');
 // const { seedHolidays }    = require('../seeders/holiday.Seeders');
 // const migrateLeaveTypeIndexes = require('../modules/leave/migrations/migrateLeaveTypeIndexes');
+const migrateDesignationIndexes = require('../modules/designation/migrations/dropDesignationNameIndex');
 
 // ── Serverless-safe connection caching ──────────────────────────
 // Vercel spins up fresh function instances per request/cold-start.
@@ -80,9 +81,13 @@ const connectDB = async () => {
     cached.promise = mongoose.connect(process.env.MONGO_URI, {
       bufferCommands: false,          // fail fast instead of buffering silently for 10s
       serverSelectionTimeoutMS: 10000,
-    }).then((m) => {
+    }).then(async (m) => {
+      await migrateDesignationIndexes();
       console.log('✅ MongoDB connected');
       return m;
+    }).catch((error) => {
+      cached.promise = null;
+      throw error;
     });
   }
 

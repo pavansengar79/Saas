@@ -14,6 +14,8 @@ const timeFormat = Joi.string()
   .regex(/^([01]\d|2[0-3]):([0-5]\d)$/)
   .messages({ "string.pattern.base": "Time must be in HH:MM format (e.g., 09:00)" });
 
+const SHIFT_TYPE_VALUES = ["GENERAL", "MORNING", "EVENING", "NIGHT", "ROTATIONAL", "DAY"];
+
 // ─── CREATE SHIFT ─────────────────────────────────────────────
 // POST /shifts
 exports.createShift = Joi.object({
@@ -66,7 +68,9 @@ exports.createShift = Joi.object({
     .description("Days of week this shift is applicable"),
 
   shiftType: Joi.string()
-    .valid("GENERAL", "MORNING", "EVENING", "NIGHT", "ROTATIONAL")
+    .trim()
+    .uppercase()
+    .valid(...SHIFT_TYPE_VALUES)
     .default("GENERAL"),
 
   isDefault: Joi.boolean()
@@ -122,7 +126,9 @@ exports.updateShift = Joi.object({
     .optional(),
 
   shiftType: Joi.string()
-    .valid("GENERAL", "MORNING", "EVENING", "NIGHT", "ROTATIONAL")
+    .trim()
+    .uppercase()
+    .valid(...SHIFT_TYPE_VALUES)
     .optional(),
 
   isDefault: Joi.boolean()
@@ -148,7 +154,9 @@ exports.getShifts = Joi.object({
     .optional(),
 
   shiftType: Joi.string()
-    .valid("GENERAL", "MORNING", "EVENING", "NIGHT", "ROTATIONAL")
+    .trim()
+    .uppercase()
+    .valid(...SHIFT_TYPE_VALUES)
     .optional(),
 
   unit_id: objectId.optional(),

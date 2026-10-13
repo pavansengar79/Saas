@@ -19,6 +19,8 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
+const SHIFT_TYPE_VALUES = ["GENERAL", "MORNING", "EVENING", "NIGHT", "ROTATIONAL", "DAY"];
+
 const shiftSchema = new Schema(
   {
     // ─── Scope ───────────────────────────────────────────────
@@ -111,8 +113,9 @@ const shiftSchema = new Schema(
     // ─── Type ────────────────────────────────────────────────
     shiftType: {
       type:    String,
-      enum:    ["DAY", "NIGHT", "GENERAL", "ROTATIONAL"],
+      enum:    SHIFT_TYPE_VALUES,
       default: "GENERAL",
+      set:     (value) => (value == null ? value : String(value).trim().toUpperCase()),
     },
 
     // ─── Default flag ────────────────────────────────────────

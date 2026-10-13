@@ -474,7 +474,7 @@ exports.validateRequestAgainstPolicy = async (policy, requestData, monthlyCount)
   }
 
   // Check document requirement
-  if (policy.documentRequired.enabled && policy.documentRequired.forTypes.includes(requestData.type)) {
+  if (policy.documentRequired?.enabled && policy.documentRequired.forTypes?.includes(requestData.type)) {
     if (!requestData.attachments || requestData.attachments.length === 0) {
       errors.push(`Document is mandatory for '${requestData.type}' regularisation`);
     }

@@ -17,6 +17,9 @@ exports.getMyAttendance = Joi.object({
       "any.required":         "month query param required hai (e.g. 2026-04)",
       "string.pattern.base":  "month format YYYY-MM hona chahiye (e.g. 2026-04)",
     }),
+  orgId: objectId.optional(),
+  companyId: objectId.optional(),
+  unit_id: objectId.optional(),
 });
 
 // ─── POST /punch-in ───────────────────────────────────────────
@@ -119,7 +122,7 @@ exports.regularize = Joi.object({
       "ON_LEAVE", "HOLIDAY", "WEEKEND", "LATE", "WFH"
     )
     .required()
-    .messages({ "any.required": "status required hai" }),
+    .messages({ "any.required": "Status is required" }),
 
   checkIn: Joi.date()
     .iso()
@@ -132,7 +135,7 @@ exports.regularize = Joi.object({
     .optional()
     .allow(null)
     .messages({
-      "date.min": "checkOut, checkIn se pehle nahi ho sakta",
+      "date.min": "Check-out must be after check-in",
     }),
 
   remarks: Joi.string()
@@ -141,8 +144,8 @@ exports.regularize = Joi.object({
     .max(500)
     .required()
     .messages({
-      "any.required": "Regularization ke liye remarks required hain",
-      "string.min":   "Remarks kam se kam 5 characters ke hone chahiye",
+      "any.required": "Remarks are required for regularization",
+      "string.min":   "Remarks must be at least 5 characters long",
     }),
 
   attachments: Joi.array()
@@ -161,6 +164,9 @@ exports.getSummary = Joi.object({
       "string.pattern.base": "month format YYYY-MM hona chahiye",
     }),
 
+  orgId: objectId.optional(),
+  companyId: objectId.optional(),
+  unit_id: objectId.optional(),
   employeeId: objectId.optional(),
 });
 

@@ -11,6 +11,7 @@ const { forgotPasswordTemplate } = require("../../utils/email/templates/forgetPa
 const Customer = require("../customer/models/customer.model");
 const Organization = require("../organisation/models/organization.model");
 const Company = require("../company/models/company.model");
+const Unit = require("../unit/models/unit.model");
 
 // ── Plan modules → permission module mapping ──────────────────
 const MODULE_MAP = {
@@ -322,6 +323,25 @@ exports.getMe = async (user) => {
 
   const structureLevel = subscription?.plan_snapshot?.structure_level || null;
 
+  // Refresh responses need hierarchy details to rebuild the client context.
+  const [organization, company, unit] = await Promise.all([
+    currentUser.org_id
+      ? Organization.findById(currentUser.org_id)
+          .select("name logo_url address timezone currency")
+          .lean()
+      : null,
+    currentUser.company_id
+      ? Company.findById(currentUser.company_id)
+          .select("company_name logo_url company_pan company_gst address")
+          .lean()
+      : null,
+    currentUser.unit_id
+      ? Unit.findById(currentUser.unit_id)
+          .select("name unit_code location")
+          .lean()
+      : null,
+  ]);
+
   // ── Filter permissions by plan modules ────────────────────
   const filteredPerms = filterPermissions(currentUser.roleId.permissions, subscription);
 
@@ -339,6 +359,9 @@ exports.getMe = async (user) => {
       org_id:          currentUser.org_id     || null,
       company_id:      currentUser.company_id || null,
       unit_id:         currentUser.unit_id    || null,
+      organization:    organization || null,
+      company:         company || null,
+      unit:            unit || null,
       is_first_login:  currentUser.is_first_login,
       isEmailVerified: currentUser.isEmailVerified,
       status:          currentUser.status,

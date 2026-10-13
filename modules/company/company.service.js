@@ -42,6 +42,13 @@ exports.createCompany = async (payload, reqUser) => {
     is_deleted:    false,
   });
   if (existing) throw new AppError("A company with this email already exists", 409);
+
+  const existingName = await Company.findOne({
+    org_id: reqUser.orgId,
+    company_name: company_name.trim(),
+    is_deleted: false,
+  }).collation({ locale: "en", strength: 2 });
+  if (existingName) throw new AppError("A company with this name already exists", 409);
  
   // Auto-generate unique company_code
   let company_code;

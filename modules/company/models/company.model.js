@@ -50,11 +50,14 @@ const companySchema = new mongoose.Schema(
       required: true,
       lowercase: true,
       trim: true,
+      match: [/^[^.]/, "Company email cannot start with a dot"],
     },
 
     company_phone: {
       type: String,
       required: true,
+      maxlength: 13,
+      match: /^[0-9]{1,13}$/,
     },
 
     logo_url: {

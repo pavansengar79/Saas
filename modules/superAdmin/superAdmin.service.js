@@ -31,27 +31,39 @@ const generateTempPassword = () =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.getAllTenants = async (query) => {
-  const { status, search, page = 1, limit = 20 } = query;
+  const { status, search, orgName, page = 1, limit = 20 } = query;
+  const searchTerm = typeof search === "string" ? search.trim() : "";
+  const literalSearch = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const searchFields = searchTerm ? [
+    { business_name: { $regex: literalSearch, $options: "i" } },
+    { contact_email: { $regex: literalSearch, $options: "i" } },
+    { contact_name: { $regex: literalSearch, $options: "i" } },
+    { contact_phone: { $regex: literalSearch, $options: "i" } },
+    ...(mongoose.isValidObjectId(searchTerm) ? [{ _id: new mongoose.Types.ObjectId(searchTerm) }] : []),
+  ] : [];
 
   const filter = { is_deleted: false };
 
-  if (status) filter.status = status;
+  if (status) filter.status = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
 
-  if (search) {
-    filter.$or = [
-      { business_name:  { $regex: search, $options: "i" } },
-      { contact_email: { $regex: search, $options: "i" } },
-      { contact_name:  { $regex: search, $options: "i" } },
-    ];
+  if (orgName) {
+    // Treat the organization name as a literal substring, not a regex pattern.
+    const matchingOrgs = await Organization.find({
+      name: { $regex: orgName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" },
+      is_deleted: false
+    }).select("customer_id").lean();
+    filter._id = { $in: matchingOrgs.map(org => org.customer_id) };
   }
+
+  if (searchTerm) filter.$or = searchFields;
 
   const skip = (Number(page) - 1) * Number(limit);
 
   // If search term provided, also search in Organization collection
   let orgFilterIds = [];
-  if (search) {
+  if (searchTerm) {
     const matchingOrgs = await Organization.find({
-      name: { $regex: search, $options: "i" },
+      name: { $regex: literalSearch, $options: "i" },
       is_deleted: false
     }).select("customer_id").lean();
     
@@ -60,16 +72,11 @@ exports.getAllTenants = async (query) => {
 
   // Combine Customer search + Organization search results
   let finalFilter = filter;
-  if (search && orgFilterIds.length > 0) {
+  if (searchTerm && orgFilterIds.length > 0) {
     // Search in Customer fields OR match customer_id from Organization
     finalFilter = {
-      is_deleted: false,
-      $or: [
-        { business_name:  { $regex: search, $options: "i" } },
-        { contact_email: { $regex: search, $options: "i" } },
-        { contact_name:  { $regex: search, $options: "i" } },
-        { _id: { $in: orgFilterIds } }
-      ]
+      ...filter,
+      $or: [...searchFields, { _id: { $in: orgFilterIds } }]
     };
   }
 

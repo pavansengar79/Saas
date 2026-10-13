@@ -47,6 +47,8 @@ router.get(
 
 router.get("/", authenticate, ctrl.getLogs);
 
+router.get("/export", authenticate, ctrl.exportLogs);
+
 // HR-specific employee audit logs (filtered for HR operations)
 router.get("/hr/employee-logs", authenticate, ctrl.getHREmployeeLogs);
 

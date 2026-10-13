@@ -42,6 +42,15 @@ exports.runForTenant = async (req, res, next) => {
       req.user
     );
 
+    const { processed, failed, errors } = result.summary;
+    if (processed === 0 && failed > 0) {
+      const reason = errors[0]?.error;
+      const message = reason && errors.every(entry => entry.error === reason)
+        ? reason
+        : "Payroll failed for all employees. Check individual errors.";
+      return res.status(422).json({ success: false, message, data: result });
+    }
+
     res.json({
       success: true,
       message: `Payroll run complete. Processed: ${result.summary.processed}, Failed: ${result.summary.failed}`,

@@ -81,6 +81,18 @@ exports.authenticate = async (req, res, next) => {
         }
       }
 
+      if (decoded.org_id) {
+        const Organization = require("../modules/organisation/models/organization.model");
+        const organization = await Organization.findById(decoded.org_id)
+          .select("customer_id")
+          .populate("customer_id", "status")
+          .lean();
+
+        if (organization?.customer_id?.status === "Suspended") {
+          return res.status(401).json({ success: false, message: "Tenant is suspended" });
+        }
+      }
+
       // Attach name + email for audit logs
       req.user.name  = dbUser.name  || null;
       req.user.email = dbUser.email || null;
