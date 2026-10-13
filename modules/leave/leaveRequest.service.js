@@ -1595,26 +1595,47 @@ exports.getPendingApprovals = async (query, user) => {
     },
   };
 };
-exports.cancelLeaveRequest = async (id, user) => {
+exports.cancelLeaveRequest = async (id, user, reason = null) => {
   const request = await LeaveRequest.findOne({
     _id:        id,
     userId:     user.userId,
     org_id:     user.orgId,
     company_id: user.companyId,
+    isDeleted:  { $ne: true },
   }).populate("leaveTypeId", "name code")
     .populate("l1ApproverId", "name email")
     .populate("l2ApproverId", "name email");
 
   if (!request) throw new AppError("Leave request not found", 404);
 
-  if (!["PENDING", "UNDER_REVIEW"].includes(request.status)) {
+  // PENDING / UNDER_REVIEW → can always be cancelled.
+  // APPROVED → can be cancelled only if the leave has not started yet
+  //            (start date is after today in org timezone). Once a leave has
+  //            started, attendance/payroll may already depend on it, so HR
+  //            has to handle that.
+  const wasApproved = request.status === "APPROVED";
+
+  if (wasApproved) {
+    const moment  = require("moment-timezone");
+    const ORG_TZ  = "Asia/Kolkata";
+    const today   = moment().tz(ORG_TZ).format("YYYY-MM-DD");
+    const startOn = moment(request.startDate).tz(ORG_TZ).format("YYYY-MM-DD");
+    if (startOn <= today) {
+      throw new AppError(
+        "This leave has already started. Please contact HR to cancel or modify it.",
+        400
+      );
+    }
+  } else if (!["PENDING", "UNDER_REVIEW"].includes(request.status)) {
     throw new AppError(`Cannot cancel — request is already ${request.status}`, 400);
   }
+
+  const cleanReason = typeof reason === "string" ? reason.trim().slice(0, 500) : "";
 
   request.status             = "CANCELLED";
   request.cancelledAt        = new Date();
   request.cancelledBy        = user.userId;
-  request.cancellationReason = "Cancelled by employee";
+  request.cancellationReason = cleanReason || "Cancelled by employee";
   await request.save();
 
   // NOTE: Balance updates removed - balances are calculated dynamically from LeaveRequest records
@@ -1646,6 +1667,8 @@ exports.cancelLeaveRequest = async (id, user) => {
             endDate:      fmtDate(request.endDate),
             totalDays:    request.totalDays,
             leaveId:      request._id.toString(),
+            wasApproved,
+            reason:       request.cancellationReason,
           },
           inApp:  true,
           push:   false   // Informational only
@@ -1675,21 +1698,42 @@ exports.editLeaveRequest = async (id, payload, user) => {
     userId:     user.userId,
     org_id:     user.orgId,
     company_id: user.companyId,
+    isDeleted:  { $ne: true },
   });
   if (!request) throw new AppError("Leave request not found", 404);
 
+  // Only requests that are still waiting for approval can be edited.
+  // An approved leave has to be cancelled (if not started) and re-applied.
   if (!["PENDING", "UNDER_REVIEW"].includes(request.status)) {
-    throw new AppError(`Cannot edit — request is already ${request.status}`, 400);
+    const hint = request.status === "APPROVED"
+      ? " Cancel it and apply again with the new details."
+      : "";
+    throw new AppError(`Cannot edit — request is already ${request.status}.${hint}`, 400);
   }
 
-  let leaveType = null;
-  if (leaveTypeId) {
-    leaveType = await LeaveType.findOne({
-      _id: leaveTypeId, company_id: user.companyId, isActive: true, isDeleted: false,
-    });
-    if (!leaveType) throw new AppError("Leave type not found or inactive", 404);
+  const employee = await Employee.findOne({
+    _id:       request.employeeId,
+    isDeleted: false,
+  }).select("name org_id company_id unit_id status gender employmentType");
+  if (!employee) throw new AppError("Employee record not found for your account", 404);
+
+  // ── Leave type (new or existing) ─────────────────────────────
+  const finalLeaveTypeId = leaveTypeId || request.leaveTypeId;
+  const leaveType = await LeaveType.findOne({
+    _id: finalLeaveTypeId, company_id: user.companyId, isActive: true, isDeleted: false,
+  });
+  if (!leaveType) throw new AppError("Leave type not found or inactive", 404);
+
+  if (leaveType.applicableGender && leaveType.applicableGender !== "ALL" &&
+      employee.gender && employee.gender !== leaveType.applicableGender) {
+    throw new AppError(`${leaveType.name} is only applicable for ${leaveType.applicableGender} employees`, 400);
+  }
+  if (leaveType.applicableEmploymentTypes?.length && employee.employmentType &&
+      !leaveType.applicableEmploymentTypes.includes(employee.employmentType)) {
+    throw new AppError(`${leaveType.name} is not applicable for ${employee.employmentType} employees`, 400);
   }
 
+  // ── Dates & duration ─────────────────────────────────────────
   const start = new Date(startDate || request.startDate);
   const end   = new Date(endDate   || request.endDate);
   start.setHours(0, 0, 0, 0);
@@ -1699,9 +1743,12 @@ exports.editLeaveRequest = async (id, payload, user) => {
   if (start < today) throw new AppError("Cannot set leave for past dates", 400);
   if (end < start)   throw new AppError("End date cannot be before start date", 400);
 
-  let totalDays;
   const halfDay = isHalfDay ?? request.isHalfDay;
+  const finalSession = halfDay ? (session || request.session) : null;
+
+  let totalDays;
   if (halfDay) {
+    if (!finalSession) throw new AppError("session (FIRST_HALF/SECOND_HALF) required for half day", 400);
     if (start.getTime() !== end.getTime())
       throw new AppError("Start and end date must be same for half day", 400);
     totalDays = 0.5;
@@ -1710,28 +1757,109 @@ exports.editLeaveRequest = async (id, payload, user) => {
     if (totalDays === 0) throw new AppError("No working days in selected date range", 400);
   }
 
+  const noticeDays = Math.ceil((start - today) / (1000 * 60 * 60 * 24));
+  if (leaveType.minNoticeDays > 0 && noticeDays < leaveType.minNoticeDays) {
+    throw new AppError(`This leave type requires ${leaveType.minNoticeDays} day(s) advance notice`, 400);
+  }
+  if (leaveType.maxConsecutiveDays > 0 && !halfDay && totalDays > leaveType.maxConsecutiveDays) {
+    throw new AppError(`Maximum ${leaveType.maxConsecutiveDays} consecutive days allowed for ${leaveType.name}`, 400);
+  }
+
+  // ── Overlap (ignoring this request) ──────────────────────────
   const overlap = await LeaveRequest.findOne({
     _id:        { $ne: request._id },
     employeeId: request.employeeId,
     status:     { $in: ["PENDING", "UNDER_REVIEW", "APPROVED"] },
     startDate:  { $lte: end },
     endDate:    { $gte: start },
+    isDeleted:  { $ne: true },
   });
   if (overlap) throw new AppError("Overlapping leave request already exists for these dates", 409);
 
-  if (leaveTypeId) request.leaveTypeId = leaveTypeId;
-  request.startDate = start;
-  request.endDate   = end;
-  request.isHalfDay = halfDay;
-  if (session) request.session = session;
-  if (reason)  request.reason  = reason;
-  request.totalDays = totalDays;
-  request.editedAt  = new Date();
-  request.editedBy  = user.userId;
+  // ── Balance check (same rule as applyLeave) ──────────────────
+  const { getActiveLeavePolicy, calculateLeaveUsage } = require("./leave.service");
+  const activePolicy = await getActiveLeavePolicy(employee.org_id, employee.company_id, employee.unit_id);
+  if (!activePolicy) {
+    throw new AppError("No active leave policy found for your unit. Please contact HR.", 400);
+  }
+  const policyLeaveType = activePolicy.leaveTypes.find(
+    (plt) => plt.isActive &&
+      (plt.leaveTypeId?.toString() === finalLeaveTypeId.toString() || plt.code === leaveType.code)
+  );
+  if (!policyLeaveType) {
+    throw new AppError(
+      `Leave type "${leaveType.name}" is not configured in the active leave policy. Please contact HR.`,
+      400
+    );
+  }
+
+  const allocated = policyLeaveType.credit?.totalPerYear || 0;
+  const usage = await calculateLeaveUsage(employee._id, finalLeaveTypeId, today.getFullYear());
+  // This request's own days are already counted as "pending" for its current
+  // leave type — don't count them twice when the type stays the same.
+  const sameType = String(request.leaveTypeId) === String(finalLeaveTypeId);
+  const ownPending = sameType && ["PENDING", "UNDER_REVIEW"].includes(request.status)
+    ? (request.totalDays || 0)
+    : 0;
+  const remaining = Math.max(0, allocated - usage.used - (usage.pending - ownPending));
+  if (remaining < totalDays) {
+    throw new AppError(
+      `Insufficient leave balance. Available: ${remaining} day(s), Requested: ${totalDays} day(s)`,
+      400
+    );
+  }
+
+  // ── Apply changes ────────────────────────────────────────────
+  request.leaveTypeId = finalLeaveTypeId;
+  request.startDate   = start;
+  request.endDate     = end;
+  request.isHalfDay   = halfDay;
+  request.session     = finalSession;
+  if (typeof reason === "string" && reason.trim()) request.reason = reason.trim();
+  request.totalDays   = totalDays;
+  request.editedAt    = new Date();
+  request.editedBy    = user.userId;
+
+  // Details changed → approval starts again from L1
   request.status     = "PENDING";
-  request.l1Status   = null;
+  request.l1Status   = request.l1ApproverId ? "PENDING" : null;
+  request.l1ActionAt = null;
+  request.l1Comment  = null;
+  request.l2Status   = request.l2ApproverId ? "PENDING" : null;
   request.l2ActionAt = null;
+  request.l2Comment  = null;
 
   await request.save();
+
+  // ── Notify the approver who has to look at it again ──────────
+  const notifyId = request.l1ApproverId || request.l2ApproverId;
+  if (notifyId) {
+    try {
+      await sendNotification({
+        type:          "LEAVE_APPLIED",
+        userId:        notifyId,
+        org_id:        request.org_id,
+        unit_id:       request.unit_id,
+        referenceId:   request._id,
+        referenceType: "LeaveRequest",
+        data: {
+          employeeName: employee.name || user.name || "Employee",
+          leaveType:    leaveType.code || leaveType.name || "Leave",
+          startDate:    fmtDate(start),
+          endDate:      fmtDate(end),
+          totalDays,
+          leaveId:      request._id,
+          edited:       true,
+          priority:     "HIGH",
+        },
+        inApp: true,
+        email: false,
+        push:  true,
+      });
+    } catch (err) {
+      console.error("[editLeaveRequest] Notification exception:", err.message);
+    }
+  }
+
   return request;
 };

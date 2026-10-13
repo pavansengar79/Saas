@@ -98,13 +98,15 @@ const calculateLeaveUsage = async (employeeId, leaveTypeId, year) => {
     { $group: { _id: null, totalDays: { $sum: "$totalDays" } } },
   ]);
 
-  // PENDING leaves = pending
+  // PENDING + UNDER_REVIEW leaves = pending
+  // UNDER_REVIEW = L1 approved, waiting for L2. Those days are still reserved;
+  // leaving them out let employees apply beyond their balance in that window.
   const pendingAgg = await LeaveRequest.aggregate([
     {
       $match: {
         employeeId: toObjId(employeeId),
         leaveTypeId: toObjId(leaveTypeId),
-        status: "PENDING",
+        status: { $in: ["PENDING", "UNDER_REVIEW"] },
         startDate: { $lte: endOfYear },  // Started before end of year
         endDate: { $gte: startOfYear },   // Ends after start of year
         isDeleted: false,

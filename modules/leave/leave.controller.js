@@ -109,7 +109,7 @@ exports.removeLeaveType = async (req, res, next) => {
 // DELETE /leave/:id — cancel leave request
 exports.remove = async (req, res, next) => {
   try {
-    const result = await leaveRequestService.cancelLeaveRequest(req.params.id, req.user);
+    const result = await leaveRequestService.cancelLeaveRequest(req.params.id, req.user, req.body?.reason);
     res.status(200).json({ success: true, message: result.message });
   } catch (err) { next(err); }
 };
@@ -117,7 +117,7 @@ exports.remove = async (req, res, next) => {
 // PATCH /leave/:id/toggle-status — cancel leave request (alternate)
 exports.toggleStatus = async (req, res, next) => {
   try {
-    const result = await leaveRequestService.cancelLeaveRequest(req.params.id, req.user);
+    const result = await leaveRequestService.cancelLeaveRequest(req.params.id, req.user, req.body?.reason);
     res.status(200).json({ success: true, message: result.message });
   } catch (err) { next(err); }
 };
@@ -131,7 +131,7 @@ exports.getPendingApprovals = async (req, res, next) => {
 // PATCH /leave/:id cancel (explicit)
 exports.cancelLeave = async (req, res, next) => {
   try {
-    const result = await leaveRequestService.cancelLeaveRequest(req.params.id, req.user);
+    const result = await leaveRequestService.cancelLeaveRequest(req.params.id, req.user, req.body?.reason);
     res.status(200).json({ success: true, message: result.message });
   } catch (err) { next(err); }
 };
