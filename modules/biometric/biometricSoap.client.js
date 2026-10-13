@@ -675,6 +675,10 @@ class BiometricSoapClient {
         toDateTime: formatTransactionDate(now)
       });
 
+      if (!result.success) {
+        return { success: false, error: result.error || 'Connection failed' };
+      }
+
       // Check if authentication failed
       if (result.rawResult && result.rawResult.toLowerCase().includes('authentication')) {
         return { success: false, error: 'Authentication failed' };

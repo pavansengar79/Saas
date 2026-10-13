@@ -109,7 +109,7 @@ exports.updateConfig = async (configId, updates, user) => {
   ];
 
   allowedUpdates.forEach(field => {
-    if (updates[field] !== undefined) {
+    if (updates[field] !== undefined && (!['apiKey', 'password'].includes(field) || updates[field] !== '')) {
       config[field] = updates[field];
     }
   });
@@ -175,34 +175,28 @@ exports.testServerConnection = async (configId, user) => {
     // Test the connection
     const testResult = await adapter.testConnection();
 
-    // Update config with connection status
-    await BiometricConfig.updateOne(
-      { _id: configId },
-      {
-        $set: {
-          connectionStatus: testResult.success ? 'ONLINE' : 'ERROR',
-          lastTestedAt: new Date(),
-          lastError: testResult.success ? null : testResult.error
-        }
-      }
-    );
-
     if (!testResult.success) {
       throw new AppError(testResult.error || 'Connection test failed', 502);
     }
+
+    const testedAt = new Date();
+    await BiometricConfig.updateOne(
+      { _id: configId },
+      { $set: { connectionStatus: 'ONLINE', lastTestedAt: testedAt, lastError: null } }
+    );
 
     return {
       status: 'ONLINE',
       message: 'Server connection successful',
       serverUrl: config.serverUrl,
-      testedAt: config.lastTestedAt
+      testedAt
     };
   } catch (err) {
     // Update config with error status
-    config.connectionStatus = 'ERROR';
-    config.lastTestedAt = new Date();
-    config.lastError = err.message;
-    await config.save();
+    await BiometricConfig.updateOne(
+      { _id: configId },
+      { $set: { connectionStatus: 'ERROR', lastTestedAt: new Date(), lastError: err.message } }
+    );
 
     throw new AppError(`Server connection failed: ${err.message}`, 502);
   }

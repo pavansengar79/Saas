@@ -141,6 +141,7 @@ exports.getTeamAttendance = async (req, res, next) => {
       success:    true,
       message:    "Team attendance fetched",
       data:       result.records,
+      overview:   result.overview,
       pagination: {
         page:  result.page,
         limit: result.limit,
@@ -164,6 +165,7 @@ exports.getAllAttendance = async (req, res, next) => {
       success:    true,
       message:    "All attendance records fetched",
       data:       result.records,
+      overview:   result.overview,
       pagination: {
         page:  result.page,
         limit: result.limit,

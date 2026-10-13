@@ -763,7 +763,7 @@ exports.deleteUser = async (id, currentUser) => {
     throw new AppError("You cannot delete your own account", 400);
   }
 
-  user.isDeleted = true;
+  user.is_deleted = true;
   user.status    = "INACTIVE";
   user.updatedBy = currentUser.userId;
   await user.save();

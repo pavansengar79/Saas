@@ -1,32 +1,33 @@
-// Auto-migration: Drop old designation name index on server start
-// This runs automatically when the backend starts
-// Fixes "duplicate key" error when re-adding a designation name after soft-delete
-
 const mongoose = require('mongoose');
 
 module.exports = async function migrateDesignationIndexes() {
-  try {
-    const db = mongoose.connection.db;
-    if (!db) {
-      console.log('⏳ Database not connected yet, skipping designation migration');
-      return;
-    }
-
-    const collection = db.collection('designations');
-
-    // Try to drop the old stale unique index on designation name
-    // This index doesn't account for soft-deleted documents, causing conflicts
-    try {
-      await collection.dropIndex('name_1_company_1');
-      console.log('✅ [Migration] Dropped old name_1_company_1 index from designations');
-    } catch (err) {
-      // Index doesn't exist - that's fine
-      if (err.code !== 27) {
-        console.log('ℹ️  [Migration] Index name_1_company_1 already removed or doesn\'t exist');
-      }
-    }
-  } catch (err) {
-    console.error('⚠️  [Migration] Failed to drop designation index:', err.message);
-    // Don't throw - allow server to continue starting
+  const db = mongoose.connection.db;
+  if (!db) {
+    throw new Error('Database must be connected before migrating designation indexes');
   }
+
+  const collection = db.collection('designations');
+
+  const indexes = await collection.indexes();
+  for (const index of indexes) {
+    const fields = Object.keys(index.key);
+    const isLegacyUnitIndex = fields.includes('unit_id') &&
+      fields.every(field => field === 'unit_id' || field === 'isDeleted');
+    const isDesignationNameIndex = fields.length === 2 &&
+      fields[0] === 'unit_id' && fields[1] === 'name';
+    const isCurrentNameIndex = isDesignationNameIndex && index.unique &&
+      index.partialFilterExpression?.isDeleted === false;
+    const isLegacyNameIndex = fields.includes('name') && !isCurrentNameIndex;
+
+    if ((index.unique && (isLegacyUnitIndex || isLegacyNameIndex)) ||
+      (isDesignationNameIndex && !isCurrentNameIndex)) {
+      await collection.dropIndex(index.name);
+      console.log(`[Migration] Dropped obsolete designation index ${index.name}`);
+    }
+  }
+
+  await collection.createIndex(
+    { unit_id: 1, name: 1 },
+    { name: 'unit_id_1_name_1', unique: true, partialFilterExpression: { isDeleted: false } }
+  );
 };

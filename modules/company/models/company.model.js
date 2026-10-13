@@ -50,6 +50,7 @@ const companySchema = new mongoose.Schema(
       required: true,
       lowercase: true,
       trim: true,
+      match: [/^[^.]/, "Company email cannot start with a dot"],
     },
 
     company_phone: {

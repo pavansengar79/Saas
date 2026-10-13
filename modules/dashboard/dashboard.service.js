@@ -219,6 +219,13 @@ exports.getCompanyDashboard = async (user, query = {}) => {
 
   const today          = new Date();
   const thisMonthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const employeeRole = await Role.findOne({ slug: "employee" }).select("_id").lean();
+  const adminUserFilter = {
+    org_id: orgId,
+    company_id: companyId,
+    is_deleted: false,
+    ...(employeeRole && { roleId: { $ne: employeeRole._id } }),
+  };
 
   const [unitStats, lobCount, userCount, deptCount, desigCount, employeeCount, recentUsers, upcomingHolidays, recentUnits, roleCount, recentActivity] = await Promise.all([
 
@@ -232,12 +239,12 @@ exports.getCompanyDashboard = async (user, query = {}) => {
     ]),
 
     LOB.countDocuments({ org_id: orgId, company_id: companyId, is_deleted: false }),
-    User.countDocuments({ org_id: orgId, company_id: companyId, is_deleted: false }),
+    User.countDocuments(adminUserFilter),
     Department.countDocuments({ org_id: orgId, company_id: companyId, isDeleted: false }),
     Designation.countDocuments({ org_id: orgId, company_id: companyId, isDeleted: false }),
     Employee.countDocuments({ org_id: orgId, company_id: companyId, isDeleted: false }),
 
-    User.find({ org_id: orgId, company_id: companyId, is_deleted: false })
+    User.find(adminUserFilter)
       .sort({ createdAt: -1 })
       .limit(5)
       .populate("roleId", "name slug")
@@ -272,7 +279,7 @@ exports.getCompanyDashboard = async (user, query = {}) => {
       status: "ACTIVE",
     }),
 
-    User.find({ org_id: orgId, company_id: companyId, is_deleted: false })
+    User.find(adminUserFilter)
       .sort({ createdAt: -1 })
       .limit(5)
       .select("name email createdAt")
@@ -423,7 +430,11 @@ exports.getUnitDashboard = async (user, query = {}) => {
         unit_id:    toObjId(unitId),
         date:       { $gte: todayStart, $lte: todayEnd },
       }},
-      { $group: { _id: "$status", count: { $sum: 1 } } },
+      { $group: {
+        _id: "$status",
+        count: { $sum: 1 },
+        wfh: { $sum: { $cond: [{ $eq: ["$isWFH", true] }, 1, 0] } },
+      } },
     ]),
 
     LeaveRequest.find({
@@ -553,6 +564,7 @@ exports.getUnitDashboard = async (user, query = {}) => {
   });
   
   todayAtt.forEach((r) => { if (todayMap[r._id] !== undefined) todayMap[r._id] = r.count; });
+  const wfhCount = todayAtt.reduce((count, record) => count + (record._id === "WFH" ? record.count : record.wfh), 0);
   const totalPresent = todayMap.PRESENT + todayMap.LATE + todayMap.WFH;
   
   // Calculate absent: total employees - those who are present/late/wfh/onLeave
@@ -651,7 +663,7 @@ exports.getUnitDashboard = async (user, query = {}) => {
       absent:         calculatedAbsent,  // Calculated based on total employees
       late:           todayMap.LATE,
       onLeave:        todayMap.ON_LEAVE,
-      wfh:            todayMap.WFH,
+      wfh:            wfhCount,
       attendanceRate: employeeCount > 0 ? Math.round((totalPresent / employeeCount) * 100) : 0,
     },
     monthlyAttendance: {

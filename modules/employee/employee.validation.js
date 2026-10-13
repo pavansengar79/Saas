@@ -26,8 +26,10 @@ exports.createEmployeeSchema = Joi.object({
 
   phone: Joi.string()
     .pattern(/^(\+91[\s]?|[0])?[6-9]\d{9}$/)
-    .optional()
+    .required()
     .messages({
+      "any.required": "Phone is required",
+      "string.empty": "Phone is required",
       "string.pattern.base": "Please provide a valid 10 digit phone number"
     }),
 
@@ -97,8 +99,9 @@ exports.createEmployeeSchema = Joi.object({
   designationId: Joi.string()
     .hex()
     .length(24)
-    // .required()
+    .required()
     .messages({
+      "any.required": "Designation is required",
       "string.empty":  "Designation is required",
       "string.length": "Invalid designation ID"
     }),

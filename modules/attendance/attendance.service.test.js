@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const Attendance = require('./models/attendance.model');
 const Employee = require('../employee/models/employee.model');
 const attendanceValidation = require('./attendance.validation');
-const { getMyAttendance, getMySummary } = require('./attendance.service');
+const { getMyAttendance, getMySummary, getTeamAttendance, getAllAttendance } = require('./attendance.service');
 
 test('self attendance detail and summary use the same tenant and month filter', async () => {
   const original = {
@@ -82,5 +82,47 @@ test('self attendance validators accept optional scope IDs used by existing clie
   for (const schema of [attendanceValidation.getMyAttendance, attendanceValidation.getSummary]) {
     const { error } = schema.validate(query, { allowUnknown: false });
     assert.equal(error, undefined);
+  }
+});
+
+test('team and HR overviews count missing weekdays independently of paginated rows', async () => {
+  const original = {
+    attendanceFind: Attendance.find,
+    attendanceCount: Attendance.countDocuments,
+    employeeFind: Employee.find,
+    employeeFindOne: Employee.findOne,
+  };
+  const manager = { _id: 'manager-id' };
+  const teammate = { _id: 'teammate-id' };
+  const attendanceRecord = { employeeId: manager._id, date: new Date('2020-01-06T06:00:00Z'), status: 'PRESENT' };
+
+  try {
+    Employee.findOne = () => ({ select: async () => manager });
+    Employee.find = () => ({ select: async () => [manager, teammate] });
+    Attendance.find = () => ({
+      populate() { return this; },
+      sort() { return this; },
+      skip() { return this; },
+      limit() { return this; },
+      select: async () => [attendanceRecord],
+    });
+    Attendance.countDocuments = async () => 1;
+
+    const query = { startDate: '2020-01-06', endDate: '2020-01-07', page: 1, limit: 1 };
+    const user = { userId: 'user-id', orgId: 'org-id', companyId: 'company-id' };
+    const teamResult = await getTeamAttendance(query, user);
+    const hrResult = await getAllAttendance(query, user);
+
+    for (const result of [teamResult, hrResult]) {
+      assert.equal(result.records.length, 1);
+      assert.equal(result.overview.present, 1);
+      assert.equal(result.overview.absent, 3);
+      assert.equal(result.overview.late, 0);
+    }
+  } finally {
+    Attendance.find = original.attendanceFind;
+    Attendance.countDocuments = original.attendanceCount;
+    Employee.find = original.employeeFind;
+    Employee.findOne = original.employeeFindOne;
   }
 });
