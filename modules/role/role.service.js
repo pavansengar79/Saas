@@ -15,6 +15,7 @@ const Role       = require("./role.model");
 const Permission = require("../permission/permission.model");
 const User       = require("../auth/models/user.model");
 const AppError   = require("../../utils/appError");
+const { slugifyRoleName, SLUG_MAX_LENGTH } = require("../../utils/roleSlug");
 
 // ─── Allowed scopes per user level ───────────────────────────
 const ALLOWED_SCOPES = {
@@ -59,6 +60,36 @@ const validatePermissionScope = (permDocs, userLevel) => {
   }
 };
 
+// ─── SLUG RESOLUTION ──────────────────────────────────────────
+// Builds a valid slug from the name (or a client-sent slug) and makes it
+// unique. A custom role must never reuse a system role's slug: access checks
+// across the app compare the slug ("org_admin", "hr_manager", ...), so a
+// custom "org_admin" would silently get admin privileges.
+// Deleted roles are included because the unique index (slug+org_id+level)
+// still covers them.
+const resolveUniqueRoleSlug = async (source, orgId, level) => {
+  const base = slugifyRoleName(source);
+  if (!base) throw new AppError("Role name must contain at least one letter or number", 400);
+
+  const [systemSlugs, orgSlugs] = await Promise.all([
+    Role.distinct("slug", { $or: [{ isSystem: true }, { org_id: null }] }),
+    Role.distinct("slug", {
+      org_id: orgId || null,
+      level,
+      slug:   { $regex: `^${base}(_\\d+)?$` },
+    }),
+  ]);
+  const taken = new Set([...systemSlugs, ...orgSlugs]);
+
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const suffix = `_${i}`;
+    const candidate = `${base.slice(0, SLUG_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  throw new AppError("Could not generate a unique identifier for this role", 409);
+};
+
 // ─── CREATE ROLE ──────────────────────────────────────────────
 exports.createRole = async (payload, user) => {
   const { name, slug, description, permissions, level } = payload;
@@ -76,13 +107,16 @@ exports.createRole = async (payload, user) => {
     }
   }
 
-  // Duplicate slug check — same org
-  const existing = await Role.findOne({
-    slug,
+  // Duplicate name check — same org (case-insensitive)
+  const escapedName = String(name).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sameName = await Role.findOne({
+    name:      { $regex: `^${escapedName}$`, $options: "i" },
     org_id:    user.orgId,
     isDeleted: false,
-  });
-  if (existing) throw new AppError("Role with this slug already exists", 409);
+  }).select("_id").lean();
+  if (sameName) throw new AppError("A role with this name already exists", 409);
+
+  const finalSlug = await resolveUniqueRoleSlug(slug || name, user.orgId, roleLevel);
 
   // Validate permissions exist
   const permDocs = await Permission.find({
@@ -100,7 +134,7 @@ exports.createRole = async (payload, user) => {
 
   const role = await Role.create({
     name,
-    slug,
+    slug:       finalSlug,
     description,
     permissions,
     level:      roleLevel,
@@ -220,6 +254,9 @@ exports.updateRole = async (roleId, data, user) => {
   delete data.org_id;
   delete data.isSystem;
   delete data.level;
+  // Slug is the role's internal identifier — it goes into the JWT and is
+  // used for access checks across the app, so it never changes after create.
+  delete data.slug;
 
   // If permissions being updated — validate scope
   if (data.permissions && data.permissions.length > 0) {

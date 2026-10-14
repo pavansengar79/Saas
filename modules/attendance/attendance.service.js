@@ -860,6 +860,82 @@ exports.getMySummary = async (query, user) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// APPROVED LEAVE DAYS (shared by attendance log + team view)
+// Returns Map "<employeeId>_<YYYY-MM-DD>" → { leaveRequestId, leaveType,
+// isHalfDay, session, employee } for every working day (Mon–Fri, not a
+// holiday) inside [rangeStart, rangeEnd] covered by an APPROVED leave.
+// Needed because an employee on leave never punches, so most leave days have
+// no Attendance document until the nightly job runs (and never for today).
+// ─────────────────────────────────────────────────────────────────────────────
+const getApprovedLeaveDays = async ({ orgId, companyId, unitId, employeeFilter, rangeStart, rangeEnd, tz }) => {
+  const moment = require("moment-timezone");
+  const result = new Map();
+  if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) return result;
+
+  const leaveFilter = {
+    org_id:     orgId,
+    company_id: companyId,
+    status:     "APPROVED",
+    startDate:  { $lte: rangeEnd },
+    endDate:    { $gte: rangeStart },
+  };
+  if (unitId) leaveFilter.unit_id = unitId;
+  if (employeeFilter) leaveFilter.employeeId = employeeFilter;
+
+  const leaves = await LeaveRequest.find(leaveFilter)
+    .populate("employeeId", "name employeeId email departmentId profilePhoto unit_id")
+    .populate("leaveTypeId", "name code colorCode")
+    .select("employeeId leaveTypeId startDate endDate isHalfDay session unit_id")
+    .lean();
+  if (!leaves.length) return result;
+
+  const holidays = await Holiday.find({
+    org_id:     orgId,
+    company_id: companyId,
+    date:       { $gte: rangeStart, $lte: rangeEnd },
+    isDeleted:  false,
+  }).select("date unit_id").lean();
+  const holidayMap = new Map();
+  for (const h of holidays) {
+    const k = moment(h.date).tz(tz).format("YYYY-MM-DD");
+    if (!holidayMap.has(k)) holidayMap.set(k, new Set());
+    holidayMap.get(k).add(h.unit_id ? String(h.unit_id) : "ALL");
+  }
+
+  const rangeFrom = moment(rangeStart).tz(tz).format("YYYY-MM-DD");
+  const rangeTo   = moment(rangeEnd).tz(tz).format("YYYY-MM-DD");
+
+  for (const l of leaves) {
+    const emp = l.employeeId;
+    if (!emp?._id) continue;
+    const unit = String(emp.unit_id || l.unit_id || "");
+    const from = moment(l.startDate).tz(tz).format("YYYY-MM-DD");
+    const to   = moment(l.endDate).tz(tz).format("YYYY-MM-DD");
+    const first = from > rangeFrom ? from : rangeFrom;
+    const last  = to   < rangeTo   ? to   : rangeTo;
+
+    for (let d = moment.tz(first, tz); d.format("YYYY-MM-DD") <= last; d.add(1, "day")) {
+      const dow = d.day();
+      if (dow === 0 || dow === 6) continue;
+      const k = d.format("YYYY-MM-DD");
+      const hol = holidayMap.get(k);
+      if (hol && (hol.has("ALL") || hol.has(unit))) continue;
+
+      const { unit_id, ...empInfo } = emp;
+      result.set(`${String(emp._id)}_${k}`, {
+        leaveRequestId: l._id,
+        leaveType:      l.leaveTypeId || null,
+        isHalfDay:      !!l.isHalfDay,
+        session:        l.session || null,
+        employee:       empInfo,
+        day:            k,
+      });
+    }
+  }
+  return result;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET ALL EMPLOYEES ATTENDANCE (HR)
 // GET /hrms/attendance?month=YYYY-MM&employeeId=&status=
 // ─────────────────────────────────────────────────────────────────────────────
@@ -950,24 +1026,109 @@ exports.getAllAttendance = async (query, user) => {
     }
   }
 
-  if (status) filter.status = status;
+  // ── Approved leave days in range (up to today) ───────────────────────────
+  const dayKey = (d) => moment(d).tz(ORG_TZ).format("YYYY-MM-DD");
+  const rangeEndRaw = filter.date.$lte || new Date(filter.date.$lt.getTime() - 1);
+  const todayEnd = moment().tz(ORG_TZ).endOf("day").toDate();
+  const leaveDays = await getApprovedLeaveDays({
+    orgId, companyId, unitId,
+    employeeFilter: filter.employeeId,
+    rangeStart: filter.date.$gte,
+    rangeEnd:   rangeEndRaw < todayEnd ? rangeEndRaw : todayEnd,
+    tz: ORG_TZ,
+  });
 
-  const skip = (page - 1) * limit;
+  // Existing records on those leave days: ABSENT ones are shown as ON_LEAVE,
+  // and days with no record at all get an ON_LEAVE entry.
+  let relabelIds = [];
+  const synthetic = [];
+  if (leaveDays.size) {
+    const leaveEmpIds = [...new Set([...leaveDays.values()].map(v => v.employee._id))];
+    const onLeaveDayRecords = await Attendance.find({
+      ...filter,
+      employeeId: { $in: leaveEmpIds },
+    }).select("_id employeeId date status").lean();
 
-  const [records, total] = await Promise.all([
+    const covered = new Set();
+    for (const r of onLeaveDayRecords) {
+      const key = `${String(r.employeeId)}_${dayKey(r.date)}`;
+      if (!leaveDays.has(key)) continue;
+      covered.add(key);
+      if (r.status === "ABSENT") relabelIds.push(r._id);
+    }
+
+    if (!status || status === "ON_LEAVE") {
+      for (const [key, info] of leaveDays) {
+        if (covered.has(key)) continue;
+        synthetic.push({
+          _id:            `leave-${key}`,
+          employeeId:     info.employee,
+          date:           moment.tz(info.day, ORG_TZ).toDate(),
+          status:         "ON_LEAVE",
+          checkIn:        null,
+          checkOut:       null,
+          workingHours:   0,
+          isWFH:          false,
+          leaveRequestId: info.leaveRequestId,
+          leave:          { type: info.leaveType, isHalfDay: info.isHalfDay, session: info.session },
+          remarks:        "On approved leave",
+          isAutoMarked:   true,
+        });
+      }
+    }
+  }
+
+  // Status filter, treating "ABSENT but on approved leave" as ON_LEAVE
+  if (status === "ON_LEAVE" && relabelIds.length) {
+    filter.$or = [{ status: "ON_LEAVE" }, { _id: { $in: relabelIds } }];
+  } else if (status === "ABSENT" && relabelIds.length) {
+    filter.status = "ABSENT";
+    filter._id = { $nin: relabelIds };
+  } else if (status) {
+    filter.status = status;
+  }
+
+  const pageNum  = Number(page);
+  const limitNum = Number(limit);
+  const skip = (pageNum - 1) * limitNum;
+
+  // With extra leave entries, fetch enough DB rows to merge and paginate.
+  const [dbRecords, dbTotal] = await Promise.all([
     Attendance.find(filter)
       .populate("employeeId", "name employeeId email departmentId profilePhoto")
+      .populate("leaveRequestId", "leaveTypeId isHalfDay session")
       .sort({ date: -1, createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .select("-__v -isDeleted"),
+      .skip(synthetic.length ? 0 : skip)
+      .limit(synthetic.length ? skip + limitNum : limitNum)
+      .select("-__v -isDeleted")
+      .lean(),
     Attendance.countDocuments(filter),
   ]);
 
+  const relabel = new Set(relabelIds.map(String));
+  for (const r of dbRecords) {
+    const info = leaveDays.get(`${String(r.employeeId?._id || r.employeeId)}_${dayKey(r.date)}`);
+    if (!info) continue;
+    if (relabel.has(String(r._id))) {
+      r.status  = "ON_LEAVE";
+      r.remarks = r.remarks || "On approved leave";
+    }
+    // Every record on a leave day carries the leave details (e.g. half-day
+    // leave + punched in for the other half).
+    r.leave = { type: info.leaveType, isHalfDay: info.isHalfDay, session: info.session };
+  }
+
+  let records = dbRecords;
+  if (synthetic.length) {
+    records = [...dbRecords, ...synthetic]
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(skip, skip + limitNum);
+  }
+
   return {
-    page:    Number(page),
-    limit:   Number(limit),
-    total,
+    page:  pageNum,
+    limit: limitNum,
+    total: dbTotal + synthetic.length,
     records,
   };
 };
@@ -1143,6 +1304,17 @@ exports.getTeamAttendance = async (query, user) => {
           remarks:      onLeave ? "On approved leave" : "Auto-marked absent (no attendance record)",
           isAutoMarked: true,
         });
+      }
+    }
+
+    // An ABSENT record on a day covered by approved leave is shown as ON_LEAVE
+    for (const r of dbRecords) {
+      if (r.status !== "ABSENT") continue;
+      const k = dayKey(r.date);
+      const empLeaves = leavesByEmp.get(String(r.employeeId?._id || r.employeeId)) || [];
+      if (empLeaves.some(l => l.from <= k && k <= l.to)) {
+        r.status  = "ON_LEAVE";
+        r.remarks = r.remarks || "On approved leave";
       }
     }
   }

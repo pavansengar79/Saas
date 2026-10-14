@@ -1,4 +1,5 @@
 const Joi = require("joi");
+const { slugifyRoleName, SLUG_PATTERN, SLUG_MAX_LENGTH } = require("../utils/roleSlug");
 
 const superAdminLoginSchema = Joi.object({
   email: Joi.string()
@@ -20,12 +21,10 @@ const superAdminLoginSchema = Joi.object({
 const tenantLoginSchema = Joi.object({
 
   email: Joi.string()
-    .trim()
     .email()
     .required(),
 
   password: Joi.string()
-    .trim()
     .min(6)
     .required()
 
@@ -41,14 +40,15 @@ const createRoleSchema = Joi.object({
       "string.empty": "Role name is required"
     }),
 
+  // Optional — the form has no slug field. If sent, it is normalised in
+  // validateRole; if missing, the service derives it from the name.
   slug: Joi.string()
     .trim()
-    .lowercase()
-    // Custom role slugs can include numeric suffixes.
-    .pattern(/^[a-z0-9_]+$/)
-    .required()
+    .max(SLUG_MAX_LENGTH)
+    .pattern(SLUG_PATTERN)
+    .optional()
     .messages({
-      "string.pattern.base": "Slug must contain only lowercase letters, numbers and underscores"
+      "string.pattern.base": "Slug must start with a letter and contain only lowercase letters, numbers and underscores"
     }),
 
   description: Joi.string()
@@ -72,8 +72,8 @@ const createRoleSchema = Joi.object({
 // Update schema — all fields optional
 const updateRoleSchema = Joi.object({
   name: Joi.string().trim().min(2).max(50).optional(),
-  slug: Joi.string().trim().lowercase().pattern(/^[a-z0-9_]+$/).optional()
-    .messages({ "string.pattern.base": "Slug must contain only lowercase letters, numbers and underscores" }),
+  slug: Joi.string().trim().max(SLUG_MAX_LENGTH).pattern(SLUG_PATTERN).optional()
+    .messages({ "string.pattern.base": "Slug must start with a letter and contain only lowercase letters, numbers and underscores" }),
   description: Joi.string().allow("").optional(),
   level: Joi.string().valid("org", "company", "unit").optional(),
   permissions: Joi.array().items(Joi.string().hex().length(24)).min(1).optional()
@@ -82,7 +82,18 @@ const updateRoleSchema = Joi.object({
   modules: Joi.array().items(Joi.string()).optional(),
 });
 
+// Normalise a client-sent slug ("Test Role R2" → "test_role_r2") so a slug
+// auto-built by the frontend never fails on spaces, capitals or digits.
+const normaliseRoleSlug = (body) => {
+  if (body && typeof body.slug === "string") {
+    const slug = slugifyRoleName(body.slug);
+    if (slug) body.slug = slug;
+    else delete body.slug;
+  }
+};
+
 const validateRoleUpdate = (req, res, next) => {
+  normaliseRoleSlug(req.body);
   const { error } = updateRoleSchema.validate(req.body);
   if (error) {
     return res.status(400).json({ success: false, message: error.details[0].message });
@@ -91,6 +102,15 @@ const validateRoleUpdate = (req, res, next) => {
 };
 
 const validateRole = (req, res, next) => {
+
+  normaliseRoleSlug(req.body);
+
+  if (req.body && typeof req.body.name === "string" && !slugifyRoleName(req.body.name)) {
+    return res.status(400).json({
+      success: false,
+      message: "Role name must contain at least one letter or number",
+    });
+  }
 
   const { error } = createRoleSchema.validate(req.body);
 
