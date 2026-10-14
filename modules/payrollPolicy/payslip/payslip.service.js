@@ -161,7 +161,14 @@ exports.getPayslipById = async (id, user) => {
 
   if (!payslip) throw new AppError("Payslip not found", 404);
 
-  return payslip;
+  return {
+    ...payslip,
+    daysPayable: payslip.daysPayable ?? (
+      payslip.eligibleWorkingDays != null && payslip.lopDays != null
+        ? Math.max(0, payslip.eligibleWorkingDays - payslip.lopDays)
+        : null
+    ),
+  };
 };
 
 // ─────────────────────────────────────────────────────────────

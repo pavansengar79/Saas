@@ -50,6 +50,26 @@ const renderPayslipPdf = payslip => new Promise((resolve, reject) => {
   doc.text(`Department: ${employee.departmentId?.name || "N/A"}`);
   doc.text(`Designation: ${employee.designationId?.name || "N/A"}`);
 
+  addSectionTitle(doc, "SALARY DETAILS");
+  const summaryY = doc.y;
+  const summaryColumnWidth = 117;
+  [
+    ["CYCLE CALENDAR DAYS", payslip.actualPayableDays],
+    ["ELIGIBLE WORKDAYS", payslip.eligibleWorkingDays],
+    ["LOSS OF PAY DAYS", payslip.lopDays],
+    ["DAYS PAYABLE", payslip.daysPayable],
+  ].forEach(([label, value], index) => {
+    const x = 72 + index * summaryColumnWidth;
+    doc.font("Helvetica").fontSize(8).text(label, x, summaryY, { width: summaryColumnWidth - 8 });
+    doc.font("Helvetica-Bold").fontSize(12).text(String(value ?? "N/A"), x, summaryY + 14);
+  });
+  doc.x = 72;
+  doc.y = summaryY + 34;
+  doc.font("Helvetica").fontSize(10);
+  if (payslip.eligibleCalendarDays != null) {
+    doc.text(`Eligible calendar days (since joining): ${payslip.eligibleCalendarDays}`, 72);
+  }
+
   addSectionTitle(doc, "EARNINGS");
   addAmountRow(doc, "Basic", payslip.earnings?.basic);
   addAmountRow(doc, "HRA", payslip.earnings?.hra);
@@ -65,6 +85,7 @@ const renderPayslipPdf = payslip => new Promise((resolve, reject) => {
   addAmountRow(doc, "TDS", payslip.deductions?.tds);
   addAmountRow(doc, "Professional tax", payslip.deductions?.professionalTax);
   addAmountRow(doc, "Loss of pay", payslip.deductions?.lop);
+  addAmountRow(doc, "Gross after LOP", payslip.grossAfterLOP);
 
   addSectionTitle(doc, "NET PAY");
   doc.font("Helvetica-Bold").fontSize(14);

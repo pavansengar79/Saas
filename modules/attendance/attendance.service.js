@@ -43,6 +43,99 @@ const parseMonth = (monthStr) => {
   return { start, end, year, month };
 };
 
+const buildMyAttendanceFilter = (employee, start, end) => ({
+  org_id: employee.org_id,
+  company_id: employee.company_id,
+  unit_id: employee.unit_id,
+  employeeId: employee._id,
+  date: { $gte: start, $lt: end },
+  isDeleted: false,
+});
+
+const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
+  const moment = require("moment-timezone");
+  const timezone = "Asia/Kolkata";
+  const employees = await Employee.find({
+    org_id: filter.org_id,
+    company_id: filter.company_id,
+    ...(filter.unit_id && { unit_id: filter.unit_id }),
+    ...employeeScope,
+    status: "ACTIVE",
+    isDeleted: false,
+  }).select("_id joiningDate");
+  const scopedIds = new Set(employees.map(employee => String(employee._id)));
+  const joiningDates = new Map(employees.filter(employee => employee.joiningDate).map(employee => [
+    String(employee._id), moment(employee.joiningDate).tz(timezone).format("YYYY-MM-DD"),
+  ]));
+  const attendanceFilter = { ...filter };
+  delete attendanceFilter.status;
+  const records = await Attendance.find(attendanceFilter).select("employeeId date status");
+  const overview = { present: 0, late: 0, onLeave: 0, absent: 0 };
+  const recordedDays = new Set();
+
+  for (const record of records) {
+    const employeeId = String(record.employeeId?._id || record.employeeId);
+    if (!scopedIds.has(employeeId)) continue;
+    recordedDays.add(`${employeeId}:${moment(record.date).tz(timezone).format("YYYY-MM-DD")}`);
+    if (statusFilter && record.status !== statusFilter) continue;
+    if (["PRESENT", "LATE", "WFH"].includes(record.status)) overview.present++;
+    if (record.status === "LATE") overview.late++;
+    if (record.status === "ON_LEAVE") overview.onLeave++;
+    if (record.status === "ABSENT") overview.absent++;
+  }
+
+  if (!statusFilter || ["ABSENT", "ON_LEAVE"].includes(statusFilter)) {
+    const lastDate = filter.date.$lt
+      ? moment(filter.date.$lt).subtract(1, "millisecond")
+      : moment(filter.date.$lte);
+    const end = moment.min(lastDate.tz(timezone), moment().tz(timezone)).startOf("day");
+    const [holidays, leaves] = await Promise.all([
+      Holiday.find({
+        org_id: filter.org_id,
+        company_id: filter.company_id,
+        ...(filter.unit_id && { $or: [{ unit_id: filter.unit_id }, { unit_id: null }] }),
+        date: filter.date,
+        isActive: true,
+        isDeleted: false,
+      }).select("date"),
+      LeaveRequest.find({
+        org_id: filter.org_id,
+        company_id: filter.company_id,
+        employeeId: { $in: employees.map(employee => employee._id) },
+        status: "APPROVED",
+        startDate: { $lte: lastDate.toDate() },
+        endDate: { $gte: filter.date.$gte },
+      }).select("employeeId startDate endDate"),
+    ]);
+    const holidayDates = new Set(holidays.map(holiday => moment(holiday.date).tz(timezone).format("YYYY-MM-DD")));
+    const leaveDays = new Set();
+    for (const leave of leaves) {
+      const leaveEnd = moment.min(moment(leave.endDate).tz(timezone), end);
+      for (const day = moment.max(moment(leave.startDate).tz(timezone).startOf("day"), moment(filter.date.$gte).tz(timezone).startOf("day"));
+        day.isSameOrBefore(leaveEnd); day.add(1, "day")) {
+        leaveDays.add(`${leave.employeeId}:${day.format("YYYY-MM-DD")}`);
+      }
+    }
+    for (const day = moment(filter.date.$gte).tz(timezone).startOf("day"); day.isSameOrBefore(end); day.add(1, "day")) {
+      if (day.isoWeekday() > 5) continue;
+      const dateKey = day.format("YYYY-MM-DD");
+      if (holidayDates.has(dateKey)) continue;
+      for (const employeeId of scopedIds) {
+        if (joiningDates.has(employeeId) && dateKey < joiningDates.get(employeeId)) continue;
+        const employeeDay = `${employeeId}:${dateKey}`;
+        if (recordedDays.has(employeeDay)) continue;
+        if (leaveDays.has(employeeDay)) {
+          if (!statusFilter || statusFilter === "ON_LEAVE") overview.onLeave++;
+        } else if (!statusFilter || statusFilter === "ABSENT") {
+          overview.absent++;
+        }
+      }
+    }
+  }
+
+  return overview;
+};
+
 /**
  * Normalize any date to UTC midnight (date-only comparison)
  */

@@ -15,7 +15,14 @@ test("renders a standards-compliant payslip PDF", async () => {
     overtimeHours: 10,
     overtimeMultiplier: 2,
     grossSalary: 27800,
+    grossAfterLOP: 27800,
     netSalary: 25500,
+    actualPayableDays: 31,
+    totalWorkingDays: 22,
+    eligibleWorkingDays: 22,
+    daysPresent: 22,
+    lopDays: 0,
+    daysPayable: 22,
   });
 
   assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");

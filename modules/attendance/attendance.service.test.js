@@ -3,6 +3,8 @@ const { test } = require('node:test');
 
 const Attendance = require('./models/attendance.model');
 const Employee = require('../employee/models/employee.model');
+const Holiday = require('../holiday/models/holiday.models');
+const LeaveRequest = require('../leave/models/leaveRequest.models');
 const attendanceValidation = require('./attendance.validation');
 const { getMyAttendance, getMySummary, getTeamAttendance, getAllAttendance } = require('./attendance.service');
 
@@ -91,6 +93,8 @@ test('team and HR overviews count missing weekdays independently of paginated ro
     attendanceCount: Attendance.countDocuments,
     employeeFind: Employee.find,
     employeeFindOne: Employee.findOne,
+    holidayFind: Holiday.find,
+    leaveFind: LeaveRequest.find,
   };
   const manager = { _id: 'manager-id' };
   const teammate = { _id: 'teammate-id' };
@@ -107,6 +111,8 @@ test('team and HR overviews count missing weekdays independently of paginated ro
       select: async () => [attendanceRecord],
     });
     Attendance.countDocuments = async () => 1;
+    Holiday.find = () => ({ select: async () => [] });
+    LeaveRequest.find = () => ({ select: async () => [] });
 
     const query = { startDate: '2020-01-06', endDate: '2020-01-07', page: 1, limit: 1 };
     const user = { userId: 'user-id', orgId: 'org-id', companyId: 'company-id' };
@@ -119,10 +125,29 @@ test('team and HR overviews count missing weekdays independently of paginated ro
       assert.equal(result.overview.absent, 3);
       assert.equal(result.overview.late, 0);
     }
+
+    Employee.find = () => ({ select: async () => [manager, {
+      ...teammate, joiningDate: new Date('2020-01-07T00:00:00Z'),
+    }] });
+    const afterJoining = await getTeamAttendance(query, user);
+    assert.equal(afterJoining.overview.absent, 2);
+    Employee.find = () => ({ select: async () => [manager, teammate] });
+
+    Holiday.find = () => ({ select: async () => [{ date: new Date('2020-01-07T06:00:00Z') }] });
+    LeaveRequest.find = () => ({ select: async () => [{
+      employeeId: teammate._id,
+      startDate: new Date('2020-01-06T06:00:00Z'),
+      endDate: new Date('2020-01-06T18:00:00Z'),
+    }] });
+    const withTimeOff = await getTeamAttendance(query, user);
+    assert.equal(withTimeOff.overview.absent, 0);
+    assert.equal(withTimeOff.overview.onLeave, 1);
   } finally {
     Attendance.find = original.attendanceFind;
     Attendance.countDocuments = original.attendanceCount;
     Employee.find = original.employeeFind;
     Employee.findOne = original.employeeFindOne;
+    Holiday.find = original.holidayFind;
+    LeaveRequest.find = original.leaveFind;
   }
 });
