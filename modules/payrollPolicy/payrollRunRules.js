@@ -4,6 +4,7 @@ const AppError = require("../../utils/appError");
 const { calculatePT } = require("../../config/ptSlabs");
 
 const DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const countWorkingDays = (start, end, workDays) => {
   let count = 0;
@@ -24,14 +25,26 @@ const calculatePayrollEligibility = ({
   joiningDate,
   exitDate,
   workDays = ["MON", "TUE", "WED", "THU", "FRI"],
+  startDay = 1,
+  endDay = 31,
+  fixedWorkingDays,
 }) => {
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month, 1) - 1);
+  const cycleStart = new Date(Date.UTC(year, month - 1, startDay));
+  const cycleEnd = new Date(Date.UTC(year, month - 1, Math.min(endDay, periodEnd.getUTCDate()) + 1) - 1);
   const joinedAt = joiningDate ? new Date(joiningDate) : periodStart;
   const exitedAt = exitDate ? new Date(exitDate) : periodEnd;
-  const eligibilityStart = joinedAt > periodStart ? joinedAt : periodStart;
-  const eligibilityEnd = exitedAt < periodEnd ? exitedAt : periodEnd;
-  const totalWorkingDays = countWorkingDays(periodStart, periodEnd, workDays);
+  const eligibilityStart = joinedAt > cycleStart ? joinedAt : cycleStart;
+  const eligibilityEnd = exitedAt < cycleEnd ? exitedAt : cycleEnd;
+  const monthlyWorkingDays = countWorkingDays(periodStart, periodEnd, workDays);
+  const totalWorkingDays = countWorkingDays(cycleStart, cycleEnd, workDays);
+  const actualPayableDays = Math.max(0, (cycleEnd - cycleStart + 1) / MS_PER_DAY);
+  const eligibleCalendarDays = eligibilityStart > eligibilityEnd
+    ? 0
+    : Math.floor((Date.UTC(eligibilityEnd.getUTCFullYear(), eligibilityEnd.getUTCMonth(), eligibilityEnd.getUTCDate())
+      - Date.UTC(eligibilityStart.getUTCFullYear(), eligibilityStart.getUTCMonth(), eligibilityStart.getUTCDate())) / MS_PER_DAY) + 1;
+  const salaryDivisorDays = fixedWorkingDays || monthlyWorkingDays;
   const eligibleWorkingDays = eligibilityStart > eligibilityEnd
     ? 0
     : countWorkingDays(eligibilityStart, eligibilityEnd, workDays);
@@ -41,9 +54,13 @@ const calculatePayrollEligibility = ({
     periodEnd,
     eligibilityStart,
     eligibilityEnd,
+    actualPayableDays,
+    eligibleCalendarDays,
     totalWorkingDays,
+    monthlyWorkingDays,
+    salaryDivisorDays,
     eligibleWorkingDays,
-    proRataFactor: totalWorkingDays ? eligibleWorkingDays / totalWorkingDays : 0,
+    proRataFactor: salaryDivisorDays ? eligibleWorkingDays / salaryDivisorDays : 0,
   };
 };
 

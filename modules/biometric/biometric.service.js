@@ -664,22 +664,21 @@ exports.pullAttendanceFromDevice = async (configId, serialNumber, options, user)
     return {
       success: true,
       syncLogId: syncLog._id,
-      recordsFetched: result.records.length,
+      recordsFetched: processedResult.matchedRecords.reduce((count, record) => count + record.totalPunches, 0),
       recordsMatched: processedResult.matchedCount,
       recordsCreated: processedResult.createdCount,
       recordsUpdated: processedResult.updatedCount,
-      unmatchedCount: processedResult.unmatchedCount,
+      unmatchedCount: 0,
       // Pagination metadata
       pagination: {
         matchedTotal: processedResult.matchedRecords.length,
-        unmatchedTotal: processedResult.unmatchedRecords.length,
+        unmatchedTotal: 0,
         matchedReturned: Math.min(50, processedResult.matchedRecords.length),
-        unmatchedReturned: Math.min(50, processedResult.unmatchedRecords.length)
+        unmatchedReturned: 0
       },
       // Auto-created attendance records (matched)
       matchedRecords: processedResult.matchedRecords.slice(0, 50),
-      // Unmatched for code assignment
-      unmatchedRecords: processedResult.unmatchedRecords.slice(0, 50)
+      unmatchedRecords: []
     };
 
   } catch (error) {
@@ -749,9 +748,20 @@ const processPunchRecords = async (records, config, device, user) => {
         const mapping = await BiometricMapping.findOne({
           biometricCode: employeeCode,
           org_id: config.org_id,
-          company_id: config.company_id
+          company_id: config.company_id,
+          unit_id: config.unit_id,
+          deviceSerialNumber: device.serialNumber,
+          status: 'ACTIVE',
+          isVerified: true,
+          isDeleted: false
         }).populate({
           path: 'employeeId',
+          match: {
+            org_id: config.org_id,
+            company_id: config.company_id,
+            unit_id: config.unit_id,
+            isDeleted: false
+          },
           populate: [
             { path: 'departmentId', select: 'name' },
             { path: 'designationId', select: 'name' },
@@ -996,12 +1006,11 @@ exports.getSyncLogRecords = async (syncLogId, type, page, limit, user) => {
   }
 
   if (type === 'unmatched') {
-    const records = syncLog.unmatchedRecords.slice(skip, skip + limit);
     return {
-      records,
-      total: syncLog.unmatchedRecords.length,
+      records: [],
+      total: 0,
       page,
-      totalPages: Math.ceil(syncLog.unmatchedRecords.length / limit)
+      totalPages: 0
     };
   }
 
@@ -1012,6 +1021,7 @@ exports.getSyncLogRecords = async (syncLogId, type, page, limit, user) => {
   const attendances = await Attendance.find({
     org_id: scopeFilter.org_id,
     company_id: scopeFilter.company_id,
+    unit_id: syncLog.unit_id,
     date: today,
     punchSource: { $in: ['BIOMETRIC', 'BIOMETRIC_CLOSED'] }
   })
@@ -1030,6 +1040,7 @@ exports.getSyncLogRecords = async (syncLogId, type, page, limit, user) => {
   const total = await Attendance.countDocuments({
     org_id: scopeFilter.org_id,
     company_id: scopeFilter.company_id,
+    unit_id: syncLog.unit_id,
     date: today,
     punchSource: { $in: ['BIOMETRIC', 'BIOMETRIC_CLOSED'] }
   });
@@ -1055,6 +1066,16 @@ exports.getSyncLogRecords = async (syncLogId, type, page, limit, user) => {
   };
 };
 
+const getVisibleSyncLog = (log) => ({
+  ...log.toObject({ virtuals: false }),
+  recordsFetched: log.recordsMatched,
+  recordsProcessed: log.recordsMatched,
+  recordsUnmatched: 0,
+  recordsSkipped: 0,
+  lastRecordId: null,
+  unmatchedRecords: []
+});
+
 // ─── GET SYNC LOGS ──────────────────────────────────────────────────��──────
 exports.getSyncLogs = async (unitId, options, user) => {
   const scopeFilter = buildScopeFilter(user);
@@ -1066,7 +1087,7 @@ exports.getSyncLogs = async (unitId, options, user) => {
   .sort({ startedAt: -1 })
   .limit(options.limit || 20);
 
-  return logs;
+  return logs.map(getVisibleSyncLog);
 };
 
 // ─── GET SYNC LOG DETAILS ────────────────────────────────────────────────
@@ -1082,7 +1103,7 @@ exports.getSyncLogDetails = async (logId, user) => {
     throw new AppError('Sync log not found', 404);
   }
 
-  return log;
+  return getVisibleSyncLog(log);
 };
 
 // ─── GET DEVICE STATUS ────────────────────────────────────────────────────
@@ -1178,7 +1199,7 @@ exports.getCommands = async (unitId, options, user) => {
 // ─── POLL COMMAND STATUS ──────────────────────────────────────────────────
 exports.pollCommandStatus = async (commandId, user) => {
   // commandId is a string identifier (not ObjectId), query by commandId field
-  const command = await BiometricCommand.findOne({ commandId });
+  const command = await BiometricCommand.findOne({ commandId, ...buildScopeFilter(user) });
   
   if (!command) {
     throw new AppError('Command not found', 404);
@@ -1193,6 +1214,8 @@ exports.pollCommandStatus = async (commandId, user) => {
 
   // Get config
   const config = await BiometricConfig.findOne({
+    org_id:     command.org_id,
+    company_id: command.company_id,
     unit_id:    command.unit_id,
     isDeleted:  false
   });
@@ -1210,10 +1233,11 @@ exports.pollCommandStatus = async (commandId, user) => {
   // Update command
   await command.incrementAttempt();
 
-  if (result.success && result.data?.Status === 'SUCCESS') {
-    await command.markSuccess(result.data);
-  } else if (result.success && result.data?.Status === 'FAILED') {
-    await command.markFailed(result.data?.Error || 'Command failed');
+  const deviceStatus = typeof result.status === 'string' ? result.status.trim().toUpperCase() : '';
+  if (result.success && deviceStatus === 'SUCCESS') {
+    await command.markSuccess(result.status);
+  } else if (result.success && (deviceStatus === 'FAILED' || deviceStatus === 'FAILURE')) {
+    await command.markFailed(result.status);
   }
 
   return command;

@@ -67,6 +67,40 @@ test("mid-month joiners are eligible only from their joining date", () => {
   assert.equal(result.proRataFactor, 12 / 22);
 });
 
+test("payroll cycle ends eligibility before the rest of the month", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    joiningDate: "2026-10-06T00:00:00.000Z",
+    startDay: 1,
+    endDay: 13,
+  });
+
+  assert.equal(result.totalWorkingDays, 9);
+  assert.equal(result.actualPayableDays, 13);
+  assert.equal(result.eligibleCalendarDays, 8);
+  assert.equal(result.monthlyWorkingDays, 22);
+  assert.equal(result.eligibleWorkingDays, 6);
+  assert.equal(result.proRataFactor, 6 / 22);
+  assert.equal(result.eligibilityEnd.toISOString(), "2026-10-13T23:59:59.999Z");
+});
+
+test("fixed 30-day policy prorates only eligible cycle days", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    joiningDate: "2026-10-06T00:00:00.000Z",
+    startDay: 1,
+    endDay: 13,
+    fixedWorkingDays: 30,
+  });
+
+  assert.equal(result.totalWorkingDays, 9);
+  assert.equal(result.eligibleWorkingDays, 6);
+  assert.equal(result.salaryDivisorDays, 30);
+  assert.equal(result.proRataFactor, 6 / 30);
+});
+
 test("exit dates constrain eligibility and future joiners are ineligible", () => {
   const exiting = calculatePayrollEligibility({
     year: 2026,

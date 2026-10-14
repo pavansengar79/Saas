@@ -25,6 +25,7 @@ const Unit                   = require("../unit/models/unit.model");
 const Payslip                = require("./models/payslip.model");
 const InvestmentDeclaration  = require("./models/investmentDeclaration.model");
 const mongoose               = require("mongoose");
+const moment                 = require("moment-timezone");
 
 // ─── Parse "YYYY-MM" → { year, month, start, end } ───────────
 const parseMonth = (monthStr) => {
@@ -64,8 +65,20 @@ const calculateForEmployee = async (
     joiningDate: employee.joiningDate,
     exitDate: employee.exitDate,
     workDays: config?.workWeek,
+    startDay: policy?.salaryCycle?.startDay,
+    endDay: policy?.salaryCycle?.endDay,
+    fixedWorkingDays: policy?.salaryCycle?.workingDaysCalc === "fixed"
+      ? policy.salaryCycle.fixedWorkingDays
+      : undefined,
   });
-  const { totalWorkingDays, eligibleWorkingDays, proRataFactor } = eligibility;
+  const { totalWorkingDays, monthlyWorkingDays, salaryDivisorDays, eligibleWorkingDays, proRataFactor } = eligibility;
+  const timezone = config?.timezone || "Asia/Kolkata";
+  const attendanceStart = moment.tz(eligibility.eligibilityStart.toISOString().slice(0, 10), "YYYY-MM-DD", timezone).startOf("day").toDate();
+  const attendanceEnd = moment.tz(eligibility.eligibilityEnd.toISOString().slice(0, 10), "YYYY-MM-DD", timezone).endOf("day").toDate();
+  const workDayNumbers = (config?.workWeek || ["MON", "TUE", "WED", "THU", "FRI"])
+    .map(day => ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].indexOf(day) + 1)
+    .filter(day => day > 0);
+  const isWorkday = { $in: [{ $dayOfWeek: { date: "$date", timezone } }, workDayNumbers] };
 
   // ── Attendance summary ──────────────────────────────────────
   const attendanceSummary = await Attendance.aggregate([
@@ -73,32 +86,40 @@ const calculateForEmployee = async (
       $match: {
         employeeId: employee._id,
         company_id: new mongoose.Types.ObjectId(String(company_id)),
-        date:       { $gte: eligibility.eligibilityStart, $lte: eligibility.eligibilityEnd },
+        date:       { $gte: attendanceStart, $lte: attendanceEnd },
       },
     },
     {
       $group: {
         _id:           null,
-        present:       { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
-        halfDay:       { $sum: { $cond: [{ $eq: ["$status", "HALF_DAY"] }, 0.5, 0] } },
+        present:       { $sum: { $cond: [{ $and: [isWorkday, { $in: ["$status", ["PRESENT", "WFH", "LATE"]] }] }, 1, 0] } },
+        halfDay:       { $sum: { $cond: [{ $and: [isWorkday, { $eq: ["$status", "HALF_DAY"] }] }, 0.5, 0] } },
+        weekendWorked: { $sum: { $cond: [{ $and: [{ $not: [isWorkday] }, { $in: ["$status", ["PRESENT", "WFH", "LATE"]] }] }, 1, 0] } },
+        weekendHalfDay: { $sum: { $cond: [{ $and: [{ $not: [isWorkday] }, { $eq: ["$status", "HALF_DAY"] }] }, 0.5, 0] } },
         onLeave:       {
           $sum: {
             $cond: [
-              { $and: [{ $eq: ["$status", "ON_LEAVE"] }, { $ne: ["$isLWP", true] }] },
+              { $and: [isWorkday, { $eq: ["$status", "ON_LEAVE"] }, { $ne: ["$isLWP", true] }] },
               1,
               0,
             ],
           },
         },
-        holiday:       { $sum: { $cond: [{ $eq: ["$status", "HOLIDAY"] }, 1, 0] } },
+        holiday:       { $sum: { $cond: [{ $and: [isWorkday, { $eq: ["$status", "HOLIDAY"] }] }, 1, 0] } },
         overtimeHours: { $sum: { $ifNull: ["$overtimeHours", 0] } },
       },
     },
   ]);
 
-  const att          = attendanceSummary[0] || { present: 0, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
-  const daysPresent  = att.present + att.halfDay + att.onLeave + att.holiday;
-  const lopDays      = Math.max(0, eligibleWorkingDays - daysPresent);
+  const att          = attendanceSummary[0] || { present: 0, halfDay: 0, weekendWorked: 0, weekendHalfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  const regularDaysPresent = att.present + att.halfDay + att.onLeave + att.holiday;
+  const extraDaysWorked = (att.weekendWorked || 0) + (att.weekendHalfDay || 0);
+  const daysPresent = regularDaysPresent + extraDaysWorked;
+  const daysPayable = Math.min(eligibleWorkingDays, regularDaysPresent) + extraDaysWorked;
+  const lopDays = policy?.lop?.enabled === false ? 0 : Math.max(0, eligibleWorkingDays - regularDaysPresent);
+  const earningsFactor = policy?.lop?.enabled === false
+    ? (salaryDivisorDays ? daysPayable / salaryDivisorDays : 0)
+    : proRataFactor + (salaryDivisorDays ? extraDaysWorked / salaryDivisorDays : 0);
 
   console.log(`[PAYROLL] ${employee.name} ATTENDANCE:`, {
     totalWorkingDays,
@@ -112,16 +133,19 @@ const calculateForEmployee = async (
   });
 
   const salary = employee.salary;
-  const basic  = (salary?.basic || 0) * proRataFactor;
-  const hra    = (salary?.hra   || 0) * proRataFactor;
-  const travel = (salary?.travelAllowance  || 0) * proRataFactor;
-  const medical= (salary?.medicalAllowance || 0) * proRataFactor;
-  const special= (salary?.specialAllowance || 0) * proRataFactor;
+  const basic  = (salary?.basic || 0) * earningsFactor;
+  const hra    = (salary?.hra   || 0) * earningsFactor;
+  const travel = (salary?.travelAllowance  || 0) * earningsFactor;
+  const medical= (salary?.medicalAllowance || 0) * earningsFactor;
+  const special= (salary?.specialAllowance || 0) * earningsFactor;
 
   // ── LOP calculation using policy formula ──────────────────────
   // Policy lop config: enabled, calculation ("per_day"/"per_hour"), perDayFormula, roundingRule
   const lopConfig = policy?.lop || {};
   const grossEarnings = basic + hra + travel + medical + special;
+  const monthlyGross = (salary?.basic || 0) + (salary?.hra || 0)
+    + (salary?.travelAllowance || 0) + (salary?.medicalAllowance || 0)
+    + (salary?.specialAllowance || 0);
   
   // Get calendar days for the month
   const calendarDays = new Date(year, month, 0).getDate(); // e.g., 31 for July
@@ -135,8 +159,7 @@ const calculateForEmployee = async (
       lopDivisorDays = calendarDays;
       break;
     case 'monthly_salary/working_days':
-      // IMPORTANT: For pro-rata employees, use eligible working days, not total working days
-      lopDivisorDays = eligibleWorkingDays;
+      lopDivisorDays = salaryDivisorDays;
       break;
     case 'monthly_salary/30':
       lopDivisorDays = 30;
@@ -145,12 +168,11 @@ const calculateForEmployee = async (
       lopDivisorDays = 26;
       break;
     default:
-      // Default to eligible working days for pro-rata employees
-      lopDivisorDays = eligibleWorkingDays > 0 ? eligibleWorkingDays : 26;
+      lopDivisorDays = salaryDivisorDays;
   }
   
   // Calculate per-day rate
-  const dailySalary = lopDivisorDays > 0 ? grossEarnings / lopDivisorDays : 0;
+  const dailySalary = lopDivisorDays > 0 ? monthlyGross / lopDivisorDays : 0;
   
   console.log(`[PAYROLL] ${employee.name} LOP CALC:`, {
     grossEarnings: grossEarnings.toFixed(2),
@@ -185,7 +207,7 @@ const calculateForEmployee = async (
   // ── Overtime pay ─────────────────────────────────────────────
   const overtimeWorkingDays = policy?.salaryCycle?.workingDaysCalc === "fixed"
     ? policy.salaryCycle.fixedWorkingDays
-    : totalWorkingDays;
+    : monthlyWorkingDays;
   const overtimeResult = calculateOvertimePay({
     detectedHours: att.overtimeHours || 0,
     attendanceOvertime: attendancePolicy.overtime,
@@ -198,7 +220,7 @@ const calculateForEmployee = async (
       specialAllowance: special,
       customComponents: (salary?.customComponents || []).map(component => ({
         ...component,
-        amount: component.amount * proRataFactor,
+        amount: component.amount * earningsFactor,
       })),
     },
     workingDays: overtimeWorkingDays,
@@ -220,6 +242,7 @@ const calculateForEmployee = async (
     companyState: statutoryLocation.companyState,
     employeeState: employee?.location?.stateCode || employee?.currentAddress?.stateCode,
   });
+  const payableBasic = Math.max(0, basic - lopDays * (salary?.basic || 0) / (lopDivisorDays || 1));
   const {
     pfEmployee,
     pfEmployer,
@@ -227,7 +250,7 @@ const calculateForEmployee = async (
     esiEmployer,
     professionalTax,
   } = calculateStatutoryDeductions({
-    basic,
+    basic: payableBasic,
     grossSalary,
     taxCompliance: policy?.taxCompliance,
     ptState,
@@ -369,10 +392,13 @@ const calculateForEmployee = async (
     grossSalary:       parseFloat(grossBeforeLOP.toFixed(2)),
     grossAfterLOP:      parseFloat(grossSalary.toFixed(2)),     //
     netSalary:         Math.max(0, netSalary),
+    actualPayableDays: eligibility.actualPayableDays,
+    eligibleCalendarDays: eligibility.eligibleCalendarDays,
     totalWorkingDays,
     eligibleWorkingDays,
     daysPresent:       parseFloat(daysPresent.toFixed(1)),
     lopDays:           parseFloat(lopDays.toFixed(2)),
+    daysPayable:       parseFloat(daysPayable.toFixed(2)),
     overtimeHours:     parseFloat((att.overtimeHours || 0).toFixed(2)),
     
     // LOP calculation details for payslip display
