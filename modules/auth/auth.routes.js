@@ -13,40 +13,36 @@ const { tenantLoginSchema } = require("../../validations/auth.validations");
 router.post("/login", validate(tenantLoginSchema), authController.login);
 const passport = require("passport");
 const { authenticate } = require("../../middlewares/auth.middleware");
-// Google OAuth start
-// router.get("/google",
-//   passport.authenticate("google", {
-//     scope: ["email", "profile"],
-//     session: false
-//   })
-// );
-// auth.routes.js
+const { resolveCallbackUrl, buildRedirect } = require("./google.redirect");
 router.get("/google", (req, res, next) => {
-  const returnUrl = req.query.returnUrl
-   // ✅ Valid URL check
-  const isValidUrl = returnUrl && returnUrl.startsWith("http");
-  const state = isValidUrl 
-    ? returnUrl 
-    : process.env.GOOGLE_FRONTEND_REDIRECT_URI;
-
-  console.log("returnUrl from frontend:", returnUrl);  // debug
   passport.authenticate("google", {
     scope:   ["email", "profile"],
     session: false,
-    state:   returnUrl  // ✅ returnUrl ko state mein pass karo
+    state:   resolveCallbackUrl(req.query.returnUrl)
   })(req, res, next);
 });
 
 router.get("/me", authenticate, authController.getMe);
 
-// Google callback
-router.get("/google/callback",
-  passport.authenticate("google", {
-    session: false,
-    failureRedirect: `${process.env.GOOGLE_FRONTEND_REDIRECT_URI}/login?error=google_failed`
-  }),
-  authController.googleCallback
-);
+router.get("/google/callback", (req, res, next) => {
+  const callbackUrl = resolveCallbackUrl(req.query.state);
+  if (req.query.error) {
+    return res.redirect(buildRedirect(callbackUrl, { error: "Google sign-in was cancelled or failed" }));
+  }
+
+  passport.authenticate("google", { session: false }, (error, googleUser, info) => {
+    if (error) {
+      console.error("[Google OAuth] callback failed:", error);
+      return res.redirect(buildRedirect(callbackUrl, { error: "Google sign-in failed. Please try again." }));
+    }
+    if (!googleUser) {
+      return res.redirect(buildRedirect(callbackUrl, { error: info?.message || "Google sign-in failed" }));
+    }
+    req.user = googleUser;
+    req.googleCallbackUrl = callbackUrl;
+    return authController.googleCallback(req, res, next);
+  })(req, res, next);
+});
 const forgotPasswordSchema = require("../../validations/auth.validations").forgotPasswordSchema;
 const resetPasswordSchema = require("../../validations/auth.validations").resetPasswordSchema;
 
@@ -62,8 +58,7 @@ const changePasswordController = require("./auth.changePassword.controller");
 const { changePasswordSchema } = require("../../validations/auth.validations");
 router.post("/change-password", authenticate, validate(changePasswordSchema), changePasswordController.changePassword);
 
-// Company details submit — naye user ke liye
-router.post("/complete-registration", authController.completeRegistration);
+// Google accounts without an HRMS user use public registration instead.
 router.patch("/me", authenticate, authController.updateMe);
 
 router.post(

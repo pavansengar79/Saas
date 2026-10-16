@@ -18,6 +18,8 @@ const {
 } = require("./payrollRunRules");
 const Employee               = require("../employee/models/employee.model");
 const Attendance             = require("../attendance/models/attendance.model");
+const LeaveRequest           = require("../leave/models/leaveRequest.models");
+const LeaveType              = require("../leave/models/leaveType.models");
 const LeaveBalance           = require("../leave/models/leaveBalance.models");
 const CompanyConfig          = require("../companyConfig/models/companyConfig.model");
 const Company                = require("../company/models/company.model");
@@ -36,6 +38,51 @@ const parseMonth = (monthStr) => {
   const start = new Date(Date.UTC(year, month - 1, 1));
   const end   = new Date(Date.UTC(year, month, 1) - 1);
   return { year, month, start, end };
+};
+
+const getUnrecordedPaidLeaveDays = async (employee, company_id, start, end, timezone, workDayNumbers) => {
+  const leaves = await LeaveRequest.find({
+    org_id: employee.org_id,
+    company_id,
+    employeeId: employee._id,
+    status: "APPROVED",
+    startDate: { $lte: end },
+    endDate: { $gte: start },
+  }).select("startDate endDate leaveTypeId isHalfDay").lean();
+  if (!leaves.length) return 0;
+
+  const types = await LeaveType.find({
+    _id: { $in: leaves.map(leave => leave.leaveTypeId) },
+    company_id,
+    isPaid: true,
+  }).select("_id").lean();
+  const paidTypeIds = new Set(types.map(type => String(type._id)));
+  const records = await Attendance.find({
+    employeeId: employee._id,
+    company_id,
+    date: { $gte: start, $lte: end },
+  }).select("date status").lean();
+  const statusByDay = new Map(records.map(record => [moment(record.date).tz(timezone).format("YYYY-MM-DD"), record.status]));
+  const paidDays = new Map();
+
+  for (const leave of leaves) {
+    if (!paidTypeIds.has(String(leave.leaveTypeId))) continue;
+    const first = moment.max(moment(leave.startDate).tz(timezone).startOf("day"), moment(start).tz(timezone).startOf("day"));
+    const last = moment.min(moment(leave.endDate).tz(timezone).startOf("day"), moment(end).tz(timezone).startOf("day"));
+    for (const day = first.clone(); day.isSameOrBefore(last, "day"); day.add(1, "day")) {
+      if (!workDayNumbers.includes(day.day() + 1)) continue;
+      const key = day.format("YYYY-MM-DD");
+      paidDays.set(key, Math.max(paidDays.get(key) || 0, leave.isHalfDay ? 0.5 : 1));
+    }
+  }
+
+  let credited = 0;
+  for (const [day, duration] of paidDays) {
+    const status = statusByDay.get(day);
+    if (status === "HALF_DAY") credited += Math.min(duration, 0.5);
+    else if (!status || status === "ABSENT") credited += duration;
+  }
+  return credited;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +117,7 @@ const calculateForEmployee = async (
     fixedWorkingDays: policy?.salaryCycle?.workingDaysCalc === "fixed"
       ? policy.salaryCycle.fixedWorkingDays
       : undefined,
+    proRata: policy?.proRata,
   });
   const { totalWorkingDays, monthlyWorkingDays, salaryDivisorDays, eligibleWorkingDays, proRataFactor } = eligibility;
   const timezone = config?.timezone || "Asia/Kolkata";
@@ -112,27 +160,19 @@ const calculateForEmployee = async (
   ]);
 
   const att          = attendanceSummary[0] || { present: 0, halfDay: 0, weekendWorked: 0, weekendHalfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
-  const regularDaysPresent = att.present + att.halfDay + att.onLeave + att.holiday;
+  const unrecordedPaidLeave = await getUnrecordedPaidLeaveDays(employee, company_id, attendanceStart, attendanceEnd, timezone, workDayNumbers);
+  const regularDaysPresent = att.present + att.halfDay + att.onLeave + att.holiday + unrecordedPaidLeave;
   const extraDaysWorked = (att.weekendWorked || 0) + (att.weekendHalfDay || 0);
   const daysPresent = regularDaysPresent + extraDaysWorked;
   const daysPayable = Math.min(eligibleWorkingDays, regularDaysPresent) + extraDaysWorked;
   const lopDays = policy?.lop?.enabled === false ? 0 : Math.max(0, eligibleWorkingDays - regularDaysPresent);
-  const earningsFactor = policy?.lop?.enabled === false
-    ? (salaryDivisorDays ? daysPayable / salaryDivisorDays : 0)
-    : proRataFactor + (salaryDivisorDays ? extraDaysWorked / salaryDivisorDays : 0);
-
-  console.log(`[PAYROLL] ${employee.name} ATTENDANCE:`, {
-    totalWorkingDays,
-    eligibleWorkingDays,
-    daysPresent,
-    lopDays,
-    present: att.present,
-    halfDay: att.halfDay,
-    onLeave: att.onLeave,
-    holiday: att.holiday
-  });
+  const earningsFactor = proRataFactor + (salaryDivisorDays ? extraDaysWorked / salaryDivisorDays : 0);
 
   const salary = employee.salary;
+  if (!salary || ![salary.basic, salary.hra, salary.travelAllowance, salary.medicalAllowance, salary.specialAllowance]
+    .some(component => Number(component) > 0)) {
+    throw new AppError("Employee has no assigned salary structure", 400);
+  }
   const basic  = (salary?.basic || 0) * earningsFactor;
   const hra    = (salary?.hra   || 0) * earningsFactor;
   const travel = (salary?.travelAllowance  || 0) * earningsFactor;
@@ -173,19 +213,19 @@ const calculateForEmployee = async (
   
   // Calculate per-day rate
   const dailySalary = lopDivisorDays > 0 ? monthlyGross / lopDivisorDays : 0;
+  const standardHours = config?.standardHoursPerDay || 8;
+  const isHourlyLOP = lopConfig.calculation === "per_hour";
+  if (isHourlyLOP) {
+    formulaUsed = lopConfig.perHourFormula || "daily_rate/standard_hours";
+  }
+  const hourlyRate = formulaUsed === "monthly_salary/(working_days*standard_hours)"
+    ? monthlyGross / ((salaryDivisorDays || 1) * standardHours)
+    : dailySalary / standardHours;
+  const lopDeductionRaw = isHourlyLOP
+    ? lopDays * standardHours * hourlyRate
+    : lopDays * dailySalary;
   
-  console.log(`[PAYROLL] ${employee.name} LOP CALC:`, {
-    grossEarnings: grossEarnings.toFixed(2),
-    formulaUsed,
-    lopDivisorDays,
-    dailySalary: dailySalary.toFixed(2),
-    lopDays,
-    lopDeduction: (lopDays * dailySalary).toFixed(2),
-    proRataFactor: proRataFactor.toFixed(4)
-  });
-
   // Apply rounding rule from policy
-  let lopDeductionRaw = lopDays * dailySalary;
   let lopDeduction;
   switch (lopConfig.roundingRule) {
     case 'ceil':
@@ -251,13 +291,15 @@ const calculateForEmployee = async (
     professionalTax,
   } = calculateStatutoryDeductions({
     basic: payableBasic,
+    fullBasic: salary.basic || 0,
     grossSalary,
+    standardGross: monthlyGross,
     taxCompliance: policy?.taxCompliance,
     ptState,
   });
 
   // ── TDS Calculation (Old/New Regime) ──────────────────────────────────────
-  const { calculateTDSOldRegime, calculateTDSNewRegime, STANDARD_DEDUCTION } = require("../../config/tdsSlabs");
+  const { calculateTDSOldRegime, calculateTDSNewRegime, STANDARD_DEDUCTION, NEW_REGIME_STANDARD_DEDUCTION } = require("../../config/tdsSlabs");
   const InvestmentDeclaration = require("./models/investmentDeclaration.model");
   
   let tds = 0;
@@ -276,15 +318,14 @@ const calculateForEmployee = async (
       const investments = declaration?.investments || [];
       const totalExemption = investments.reduce((sum, inv) => sum + (inv.approvedAmount || inv.declaredAmount || 0), 0);
       
-      // Annual taxable income
-      const annualGross = grossSalary * 12;
-      const taxableIncome = Math.max(0, annualGross - STANDARD_DEDUCTION - totalExemption);
+      const regime = policy?.tdsConfig?.taxRegime || 'new';
+      const annualGross = monthlyGross * 12;
+      const taxableIncome = Math.max(0, annualGross - (regime === 'new' ? NEW_REGIME_STANDARD_DEDUCTION : STANDARD_DEDUCTION)
+        - (regime === 'old' ? totalExemption : 0));
       
       // Calculate age for senior citizen exemption
       const age = employee.dateOfBirth ? Math.floor((new Date() - new Date(employee.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 30;
       const ageGroup = age >= 80 ? 'super_senior' : age >= 60 ? 'senior' : 'general';
-      
-      const regime = policy?.tdsConfig?.taxRegime || 'new';
       
       if (regime === 'new') {
         const tdsCalc = calculateTDSNewRegime(taxableIncome);
@@ -296,8 +337,7 @@ const calculateForEmployee = async (
         taxBreakdown = tdsCalc;
       }
     } catch (err) {
-      console.error('TDS calculation error:', err.message);
-      tds = 0; // Fallback to 0 if calculation fails
+      throw new AppError(`TDS calculation failed: ${err.message}`, 500);
     }
   }
 
@@ -402,7 +442,7 @@ const calculateForEmployee = async (
     overtimeHours:     parseFloat((att.overtimeHours || 0).toFixed(2)),
     
     // LOP calculation details for payslip display
-    lopPerDayRate:     parseFloat(dailySalary.toFixed(2)),
+    lopPerDayRate:     parseFloat((isHourlyLOP ? hourlyRate * standardHours : dailySalary).toFixed(2)),
     lopFormulaUsed:    formulaUsed,
     lopFormulaDays:    lopDivisorDays,
     
@@ -471,7 +511,7 @@ exports.runForEmployee = async (employeeId, company_id, unit_id, month, user) =>
   // ── MANDATORY: Payroll policy must exist ───────────────────
   let policy;
   try {
-    policy = await resolvePayrollPolicy(employee._id.toString(), company_id, unit_id);
+    policy = await resolvePayrollPolicy(employee._id.toString(), company_id, unit_id, { fresh: true });
   } catch (policyErr) {
     throw new AppError(
       `No active payroll policy found for employee. Please create and activate a payroll policy before running payroll.`,
@@ -545,7 +585,6 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
   if (unit_id) filter.unit_id = unit_id;
 
   const employees = await Employee.find(filter).lean();
-  console.log(`[PAYROLL] Found ${employees.length} employees for unit ${unit_id}`);
 
   const protectedPayslips = await Payslip.find({
     org_id: user.orgId,
@@ -558,15 +597,6 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
   const protectedStatusByEmployee = new Map(
     protectedPayslips.map(payslip => [payslip.employee_id.toString(), payslip.status])
   );
-  
-  // Log all employees being processed
-  const fs = require('fs');
-  const logFile = '/tmp/payroll_debug.log';
-  fs.writeFileSync(logFile, `PAYROLL RUN: ${year}-${mon}\n`);
-  fs.appendFileSync(logFile, `Employees found: ${employees.length}\n`);
-  employees.forEach(e => {
-    fs.appendFileSync(logFile, `  - ${e.name} (${e.employeeId}) | Status: ${e.status} | Joined: ${e.joiningDate} | Basic: ${e.salary?.basic || 0}\n`);
-  });
   
   if (!employees.length) throw new AppError("No active employees found", 404);
 
@@ -584,8 +614,6 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
 
   for (const employee of employees) {
     try {
-      console.log(`[PAYROLL] === Processing: ${employee.name} ===`);
-      fs.appendFileSync(logFile, `\nProcessing: ${employee.name}\n`);
       assertPayslipCanBeRecalculated(protectedStatusByEmployee.get(employee._id.toString()));
       
       // ── MANDATORY: Payroll policy must exist ─────────────────
@@ -593,7 +621,7 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
       try {
         policy = await resolvePayrollPolicy(
           employee._id.toString(), company_id,
-          employee.unit_id?.toString() || unit_id
+          employee.unit_id?.toString() || unit_id, { fresh: true }
         );
       } catch (policyErr) {
         results.failed++;
@@ -605,8 +633,6 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
         continue; // Skip this employee, process others
       }
       if (!policy) {
-        console.log(`[PAYROLL] ✗ NO POLICY for ${employee.name}`);
-        fs.appendFileSync(logFile, `  ✗ NO POLICY\n`);
         results.failed++;
         results.errors.push({
           employeeId: employee._id,
@@ -616,10 +642,7 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
         continue;
       }
       assertPayrollRunDateReached(year, mon, policy.salaryCycle?.payrollRunDate);
-      fs.appendFileSync(logFile, `  ✓ Policy found: ${policy.name}\n`);
-
       // ── CALCULATE PAYSLIP ─────────────────────────────────────────
-      console.log(`[PAYROLL] Processing employee: ${employee.name} (${employee.employeeId}), Salary Basic: ${employee.salary?.basic || 0}`);
       
       let calc;
       try {
@@ -632,14 +655,11 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
             unitState: unitStateById.get((employee.unit_id || unit_id)?.toString()),
           }
         );
-        console.log(`[PAYROLL] ✓ Calculation complete for ${employee.name}: Net Salary = ${calc.netSalary}`);
       } catch (calcErr) {
-        console.error(`[PAYROLL] ✗ Calculation FAILED for ${employee.name}:`, calcErr.message);
         throw calcErr;
       }
 
       // ── SAVE/UPDATE PAYSLIP ───────────────────────────────────────────
-      fs.appendFileSync(logFile, `  Saving payslip: employee_id=${employee._id}, year=${year}, month=${mon}\n`);
       try {
         const filter = { employee_id: employee._id, year, month: mon };
         const update = {
@@ -654,27 +674,21 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
           generatedBy: createdBy,
         };
         
-        console.log(`[PAYROLL] Saving payslip for ${employee.name}:`, JSON.stringify(filter));
         const payslip = await Payslip.findOneAndUpdate(
           filter,
           update,
           { upsert: true, new: true }
         );
-        console.log(`[PAYROLL] ✓ Payslip saved for ${employee.name} (ID: ${payslip._id})`);
-        fs.appendFileSync(logFile, `  ✓ Payslip saved: ${payslip._id}\n`);
         results.processed++;
       } catch (saveErr) {
-        console.error(`[PAYROLL] ✗ FAILED to save payslip for ${employee.name}:`, saveErr.message);
         throw saveErr;
       }
     } catch (err) {
-      console.error(`[PAYROLL] ❌ ERROR processing ${employee.name}:`, err);
       results.failed++;
       results.errors.push({ 
         employeeId: employee._id, 
         name: employee.name, 
-        error: err.message,
-        stack: err.stack
+        error: err.message
       });
     }
   }

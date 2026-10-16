@@ -2,8 +2,6 @@ const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const User = require("../modules/auth/models/user.model");
 
-console.log("GOOGLE CALLBACK URL:", process.env.GOOGLE_REDIRECT_URI); // ✅ bahar nikalo
-
 passport.use(new GoogleStrategy({
     clientID:     process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -11,33 +9,30 @@ passport.use(new GoogleStrategy({
   },
   async (accessToken, refreshToken, profile, done) => {
     try {
-      const email = profile.emails[0].value;
-      const existingUser = await User.findOne({ email, isDeleted: false })
-        .populate("roleId");
-
-      if (existingUser) {
-
-        // googleId save karo agar pehli baar Google se login kar raha hai
-        if (!existingUser.googleId) {
-          existingUser.googleId = profile.id;
-        }
-
-        // INACTIVE hai toh ACTIVE karo — Google ne email verify kar di hai
-        if (existingUser.status === "INACTIVE") {
-          existingUser.status = "ACTIVE";
-          existingUser.isEmailVerified = true;
-        }
-
-        existingUser.isNewUser = false;
-        await existingUser.save();
-
-        return done(null, existingUser);
+      const rawEmail = profile?.emails?.[0]?.value;
+      if (!rawEmail || profile?._json?.email_verified === false) {
+        return done(null, false, { message: "A verified Google email is required" });
       }
 
-      // Naya user — sirf object return karo (controller handle karega)
+      const email = rawEmail.trim().toLowerCase();
+      const existingUser = await User.findOne({ email, is_deleted: false });
+
+      if (existingUser) {
+        if (existingUser.googleId && existingUser.googleId !== profile.id) {
+          return done(null, false, { message: "This email is linked to a different Google account" });
+        }
+
+        if (!existingUser.googleId) {
+          existingUser.googleId = profile.id;
+          await existingUser.save({ validateBeforeSave: false });
+        }
+
+        return done(null, { userId: existingUser._id, googleId: profile.id });
+      }
+
       return done(null, {
         email,
-        firstName: profile.displayName,
+        name: profile.displayName || "",
         googleId:  profile.id,
         isNewUser: true
       });
