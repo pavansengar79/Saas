@@ -39,16 +39,16 @@
 // };
 
 // // POST /api/v1/auth/mfa/challenge
-// // Login ke baad OTP submit karta hai — full JWT milta hai
+// // Submit an OTP after login to receive a full JWT
 // exports.challenge = async (req, res, next) => {
 //   try {
-//       const { mfaToken, token } = req.body; // ✅ userId nahi
+//       const { mfaToken, token } = req.body; // ✅ No userId
 
 //     if (!mfaToken || !token) {
 //       return next(new AppError("mfaToken and OTP are required", 400));
 //     }
 
-//     // mfaToken decode karo
+//     // Decode the mfaToken
 //     let decoded;
 //     try {
 //       decoded = jwt.verify(mfaToken, process.env.JWT_SECRET);
@@ -65,8 +65,8 @@
 //       return next(new (require("../../utils/appError"))("Verification failed", 400));
 //     }
 
-//     // Verified — ab full JWT generate karo
-//     // User fetch karo for JWT payload
+//     // Verified — now generate a full JWT
+//     // Fetch the user for the JWT payload
 //     const User = require("./models/user.model");
 //     const user = await User.findById(userId).populate("roleId", "slug name");
 
@@ -140,7 +140,7 @@
 const mfaService    = require("./auth.mfa.service");
 const { verifyToken, generateToken } = require("../../../utils/jwt.utils"); // ✅ correct import
 const AppError      = require("../../../utils/appError");
-const User          = require("../models/user.model"); // ✅ top pe import
+const User          = require("../models/user.model"); // ✅ Import at the top
 const Employee      = require("../../employee/models/employee.model");
 const Permission    = require("../../permission/permission.model");
 const Subscription  = require("../../subscription/models/subscription.Models");
@@ -242,7 +242,7 @@ exports.challenge = async (req, res, next) => {
       return next(new AppError("mfaToken and OTP are required", 400));
     }
 
-    // ✅ verifyToken use karo — jwt.verify nahi
+    // ✅ Use verifyToken instead of jwt.verify
     let decoded;
     try {
       decoded = verifyToken(mfaToken);
@@ -254,7 +254,7 @@ exports.challenge = async (req, res, next) => {
       return next(new AppError("Invalid MFA token", 400));
     }
 
-    const userId = decoded.userId; // ✅ decoded se nikalo
+    const userId = decoded.userId; // ✅ Extract from decoded token
 
     const result = await mfaService.verifyLoginChallenge(userId, token);
 

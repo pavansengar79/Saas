@@ -18,33 +18,7 @@ const { sendEmail } = require("../../utils/email/email");
 const inviteTemplate = require("../../utils/email/templates/inviteEmail");
 
 const { invalidateEmployeeCache } = require("../../utils/policyResolver");
-const Module = require("../module/models/module.model");
-
-// ── Plan gate: company management ─────────────────────────
-// Company-level roles (company_admin, company_hr_manager) need the plan to
-// include company management — the "organisation" module (Enterprise).
-// plan_snapshot.modules holds slugs when created by tenant/superAdmin, but
-// ObjectIds when set by a plan change, so both forms are accepted.
-const assertPlanAllowsCompanyRoles = async (orgId, session = null) => {
-  const query = Subscription.findOne({ org_id: orgId, is_active: true })
-    .select("plan_snapshot.modules plan_snapshot.structure_level");
-  if (session) query.session(session);
-  const subscription = await query.lean();
-
-  const snapshot = subscription?.plan_snapshot || {};
-  if (snapshot.structure_level === "enterprise") return;
-
-  const planModules = (snapshot.modules || []).map(String);
-  if (planModules.includes("organisation")) return;
-
-  const orgModuleDoc = await Module.findOne({ slug: "organisation" }).select("_id").lean();
-  if (orgModuleDoc && planModules.includes(String(orgModuleDoc._id))) return;
-
-  throw new AppError(
-    "Your current plan does not include company management. Please upgrade your plan to add company-level users.",
-    403
-  );
-};
+const { assertPlanAllowsCompanyRoles } = require("../../utils/companyRoleEntitlement");
 
 // ── Scope filter ──────────────────────────────────────────
 const buildScopeFilter = (user) => {
@@ -59,7 +33,7 @@ const buildScopeFilter = (user) => {
     filter.company_id = user.companyId;
     filter.unit_id    = user.unitId;
   }
-  // org level → sirf org_id, sab users dikhenge
+  // Org level → filter only by org_id to include all users in the org
 
   return filter;
 };
@@ -107,8 +81,23 @@ exports.inviteUser = async (data, currentUser) => {
       throw new AppError(`You cannot assign ${role.level} level role`, 403);
     }
 
+    const resolvedCompanyId = company_id || currentUser.companyId || null;
     if (role.level === "company") {
       await assertPlanAllowsCompanyRoles(currentUser.orgId, session);
+      if (!resolvedCompanyId) {
+        throw new AppError("A company is required for a company-level role", 400);
+      }
+      if (currentUser.level === "company" && String(resolvedCompanyId) !== String(currentUser.companyId)) {
+        throw new AppError("You cannot invite users to another company", 403);
+      }
+      const targetCompany = await Company.findOne({
+        _id: resolvedCompanyId,
+        org_id: currentUser.orgId,
+        is_deleted: false,
+      }).select("_id").session(session);
+      if (!targetCompany) {
+        throw new AppError("Company not found in your organization", 404);
+      }
     }
 
     let resolvedDepartmentId = null;
@@ -166,7 +155,7 @@ exports.inviteUser = async (data, currentUser) => {
       password: hashedPassword,
       roleId,
       org_id: currentUser.orgId,
-      company_id: company_id || currentUser.companyId || null,
+      company_id: resolvedCompanyId,
       unit_id: unit_id || currentUser.unitId || null,
       status: "ACTIVE",
       is_first_login: true,
@@ -176,10 +165,11 @@ exports.inviteUser = async (data, currentUser) => {
 
     user = createdUsers[0];
 
-    // ✅ FIX: Update Company's admin field if company_id provided
-    if (company_id) {
+    // Keep the existing primary admin when another company admin is invited.
+    // Inviting a different company-level role must not replace that reference.
+    if (role.slug === "company_admin" && resolvedCompanyId) {
       await Company.updateOne(
-        { _id: company_id },
+        { _id: resolvedCompanyId, org_id: currentUser.orgId, is_deleted: false, admin: null },
         { $set: { admin: user._id } },
         { session }
       );
@@ -299,7 +289,7 @@ exports.inviteUser = async (data, currentUser) => {
 
     [department, company] = await Promise.all([
       resolvedDepartmentId ? Department.findById(resolvedDepartmentId).select("name") : null,
-      currentUser.companyId ? Company.findById(currentUser.companyId).select("company_name") : null,
+      resolvedCompanyId ? Company.findById(resolvedCompanyId).select("company_name") : null,
     ]);
 
   } catch (err) {
@@ -440,7 +430,7 @@ exports.getUsers = async (query, currentUser) => {
     filter.roleId = roleId;
   }
 
-  // departmentId — Employee model se matching userIds
+  // departmentId — find matching user IDs in the Employee model
   if (departmentId) {
     const empUserIds = await Employee.distinct("userId", {
       ...buildScopeFilter(currentUser),
@@ -540,6 +530,11 @@ exports.updateUser = async (id, data, currentUser) => {
     if (data.status && data.status !== user.status) {
       throw new AppError("You cannot change your own account status", 403);
     }
+  }
+
+  if (data.status && data.status !== user.status) {
+    const { assertCompanyAdminDeactivationConfirmed } = require('../../utils/companyAdminStatusGuard');
+    await assertCompanyAdminDeactivationConfirmed(user._id, data.status, data.confirmCompanyAdminDeactivation);
   }
 
   if (roleChanged) {
@@ -715,7 +710,7 @@ exports.getProgressionHistory = async (id, currentUser) => {
 // DELETE USER (Soft)
 // DELETE /users/:id
 // ─────────────────────────────────────────────────────────────
-exports.deleteUser = async (id, currentUser) => {
+exports.deleteUser = async (id, currentUser, confirmCompanyAdminDeactivation = false) => {
   const scopeFilter = buildScopeFilter(currentUser);
   
   console.log('🔍 Delete user request:', {
@@ -744,6 +739,9 @@ exports.deleteUser = async (id, currentUser) => {
   if (user._id.toString() === currentUser.userId) {
     throw new AppError("You cannot delete your own account", 400);
   }
+
+  const { assertCompanyAdminDeactivationConfirmed } = require('../../utils/companyAdminStatusGuard');
+  await assertCompanyAdminDeactivationConfirmed(user._id, 'INACTIVE', confirmCompanyAdminDeactivation);
 
   user.isDeleted = true;
   user.status    = "INACTIVE";

@@ -3,14 +3,14 @@
 // Delegation workflow — temporarily share your permissions with someone else
 //
 // Dynamic design:
-//   - Sirf apni permissions delegate kar sakte ho (role mein honi chahiye)
-//   - Permission scope check — unit level user org-level permission delegate nahi kar sakta
+//   - Users can only delegate permissions assigned to their own role.
+//   - Permission scope check — unit-level users cannot delegate org-level permissions.
 //   - startDate >= today, endDate > startDate
-//   - maxDelegationDays: company config se (default 90 days)
-//   - approvalRequired: company config se (default false — turant ACTIVE)
-//   - Ek hi permission ek waqt mein ek person ko sirf ek baar
-//   - Delegatee ko email on create, delegator ko email on revoke/expire
-//   - Cron job (app.js mein register karna hai) roz expire karega
+//   - maxDelegationDays: from company config (default 90 days)
+//   - approvalRequired: from company config (default false — immediately ACTIVE)
+//   - A permission can be delegated to a person only once at a time.
+//   - Email the delegatee on creation and the delegator on revocation or expiration.
+//   - A daily cron job (to be registered in app.js) expires old delegations.
 
 "use strict";
 
@@ -125,7 +125,7 @@ const getDelegatorRole = async (userId, orgId, companyId) => {
 };
 
 // ─── Helper: resolve approverId ──────────────────────────────
-// Delegator ke reporting manager → fallback unit hr_manager
+// Use the delegator's reporting manager; fall back to the unit hr_manager.
 const resolveApprover = async (delegatorUserId, unitId, orgId, companyId) => {
   // Try reporting manager via employee record
   const emp = await Employee.findOne({

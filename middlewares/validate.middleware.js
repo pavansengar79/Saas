@@ -22,8 +22,8 @@ module.exports = (schema, source = "body") => {
   return (req, res, next) => {
 
     const { error, value } = schema.validate(req[source], {
-      abortEarly: true,   // pehli error pe ruk jao
-      allowUnknown: false // extra fields allow nahi
+      abortEarly: true,   // Stop at the first error
+      allowUnknown: false // Reject extra fields
     });
 
     if (error) {
@@ -33,7 +33,7 @@ module.exports = (schema, source = "body") => {
       });
     }
 
-    // Validated + default values wapas req mein daal do
+    // Store the validated values, including defaults, back in the request
     req[source] = value;
 
     next();

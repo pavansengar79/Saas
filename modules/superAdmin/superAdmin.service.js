@@ -803,7 +803,7 @@ exports.createCustomer = async (payload) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CREATE ORG FOR CUSTOMER — Customer apni org banata hai login ke baad
+// CREATE ORG FOR CUSTOMER — Customer creates their org after login
 // POST /api/v1/super-admin/customers/create-org
 // Auth: customer token
 // ─────────────────────────────────────────────────────────────────────────────

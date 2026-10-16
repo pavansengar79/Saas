@@ -1,11 +1,11 @@
 // modules/payrollPolicy/models/payrollPeriodLock.model.js
 //
-// Payroll Period Lock — ek poora month lock karo
-// Lock ke baad:
+// Payroll Period Lock — lock an entire month
+// After locking:
 //   - Payroll re-run blocked
 //   - Payslip delete blocked  
-//   - Employee salary edit blocked (payroll month ke liye)
-//   - Sirf unlock karke changes possible
+//   - Employee salary edits blocked for the payroll month
+//   - Changes are only possible after unlocking
 "use strict";
 
 const mongoose = require("mongoose");

@@ -74,7 +74,7 @@ exports.applyLeave = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// GET /leave — employee: apni leaves, HR: unit ki saari
+// GET /leave — employee: their own leaves, HR: all leaves in their unit
 exports.getAllLeaveRequests = async (req, res, next) => {
   try {
     const result = await leaveRequestService.getAllLeaveRequests(req.query, req.user);

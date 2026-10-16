@@ -10,6 +10,7 @@ const Employee     = require("../employee/models/employee.model");
 const AppError     = require("../../utils/appError");
 const mongoose     = require("mongoose");
 const { resolveLeaveTypeScope } = require("./leaveTypeScope");
+const { daysInYear, earnedCredits } = require('./leaveAccounting');
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -79,45 +80,23 @@ const getActiveLeavePolicy = async (org_id, company_id, unit_id) => {
  * Calculate leave usage from approved/pending leave requests
  */
 const calculateLeaveUsage = async (employeeId, leaveTypeId, year) => {
-  const startOfYear = new Date(year, 0, 1);
-  const endOfYear = new Date(year, 11, 31, 23, 59, 59);
+  const startOfYear = new Date(Date.UTC(year, 0, 1));
+  const endOfYear = new Date(Date.UTC(year + 1, 0, 1));
 
   // APPROVED leaves = used
   // FIX: Use $totalDays (not numberOfDays), fix date range for cross-year leaves
-  const usedAgg = await LeaveRequest.aggregate([
-    {
-      $match: {
+  const requests = await LeaveRequest.find({
         employeeId: toObjId(employeeId),
         leaveTypeId: toObjId(leaveTypeId),
-        status: "APPROVED",
-        startDate: { $lte: endOfYear },  // Started before end of year
+        status: { $in: ['APPROVED', 'PENDING', 'UNDER_REVIEW'] },
+        startDate: { $lt: endOfYear },
         endDate: { $gte: startOfYear },   // Ends after start of year
         isDeleted: false,
-      },
-    },
-    { $group: { _id: null, totalDays: { $sum: "$totalDays" } } },
-  ]);
-
-  // PENDING + UNDER_REVIEW leaves = pending
-  // UNDER_REVIEW = L1 approved, waiting for L2. Those days are still reserved;
-  // leaving them out let employees apply beyond their balance in that window.
-  const pendingAgg = await LeaveRequest.aggregate([
-    {
-      $match: {
-        employeeId: toObjId(employeeId),
-        leaveTypeId: toObjId(leaveTypeId),
-        status: { $in: ["PENDING", "UNDER_REVIEW"] },
-        startDate: { $lte: endOfYear },  // Started before end of year
-        endDate: { $gte: startOfYear },   // Ends after start of year
-        isDeleted: false,
-      },
-    },
-    { $group: { _id: null, totalDays: { $sum: "$totalDays" } } },
-  ]);
+  }).select('startDate endDate totalDays status').lean();
 
   return {
-    used: usedAgg[0]?.totalDays || 0,
-    pending: pendingAgg[0]?.totalDays || 0,
+    used: requests.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + daysInYear(r, year), 0),
+    pending: requests.filter(r => r.status !== 'APPROVED').reduce((sum, r) => sum + daysInYear(r, year), 0),
   };
 };
 
@@ -129,7 +108,7 @@ const calculateDynamicLeaveBalances = async (employeeId, year) => {
   const targetYear = year || new Date().getFullYear();
 
   const employee = await Employee.findById(employeeId)
-    .select("name employeeId org_id company_id unit_id status")
+    .select("name employeeId org_id company_id unit_id status joiningDate")
     .populate("unit_id", "name");
 
   if (!employee) throw new AppError("Employee not found", 404);
@@ -175,12 +154,14 @@ const calculateDynamicLeaveBalances = async (employeeId, year) => {
       ? await LeaveType.findById(leaveTypeId).select("name code isPaid colorCode isHalfDayAllowed")
       : null;
 
-    const allocated = plt.credit?.totalPerYear || 0;
+    const allocated = earnedCredits(plt.credit, targetYear, new Date(), employee.joiningDate);
     const usage = leaveTypeId
       ? await calculateLeaveUsage(employeeId, leaveTypeId, targetYear)
       : { used: 0, pending: 0 };
 
-    const remaining = Math.max(0, allocated - usage.used - usage.pending);
+    const remaining = plt.balance?.allowNegative
+      ? Math.max(-(plt.balance.maxNegative || 0), allocated - usage.used - usage.pending)
+      : Math.max(0, allocated - usage.used - usage.pending);
 
     // Prefer policy leave type name (plt.name), fallback to master catalog (leaveType.name)
     const leaveTypeName = plt.name || leaveType?.name || plt.code || "Unknown Leave";
@@ -490,8 +471,8 @@ exports.calculateLeaveUsage = calculateLeaveUsage;
 // Used by: manager (own team), hr_manager (full unit), employee (own unit view)
 //
 // Dynamic:
-//   - Scope: manager → sirf reportingManagerId wale employees
-//             hr_manager/unit_admin → poora unit
+//   - Scope: manager → only employees with this reportingManagerId
+//             hr_manager/unit_admin → entire unit
 //             company_admin/org_admin → filter by unit_id param
 //   - department_id filter optional
 //   - Response includes dailySummary for frontend grid
@@ -542,7 +523,7 @@ exports.getTeamCalendar = async (query, user) => {
   // Filter out nulls from department match
   const validLeaves = leaves.filter((l) => l.employeeId !== null);
 
-  // ── Manager scope — sirf apni team ──────────────────────────
+  // ── Manager scope — only their own team ─────────────────────
   // If manager role: further filter to employees who have this manager as reportingManagerId
   let filteredLeaves = validLeaves;
   if (user.roleSlug === "manager") {
@@ -632,12 +613,12 @@ exports.getTeamCalendar = async (query, user) => {
 // ─── LEAVE LIABILITY REPORT ───────────────────────────────────
 // GET /leave/reports/liability?unit_id=&department_id=&asOfDate=
 //
-// Finance report: agar aaj sab employees ne apni encashable leave
-// cash karwa li toh company ko kitna paisa dena padega?
+// Finance report: how much would the company owe if all employees
+// cashed out their encashable leave today?
 //
 // Dynamic:
 //   - Only leaveTypes with isEncashmentAllowed: true
-//   - encashableLimit pe cap: Math.min(balance, encashableLimit ?? Infinity)
+//   - Cap at encashableLimit: Math.min(balance, encashableLimit ?? Infinity)
 //   - minBalanceAfterEncashment: employee must retain this much
 //   - encashmentBasis: BASIC / GROSS / LAST_DRAWN → salary / 26 × days
 //   - encashmentTrigger filter: YEAR_END + ON_RESIGN types included

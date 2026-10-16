@@ -20,6 +20,7 @@
 // These are company-level HR defaults — still needed here.
 
 const mongoose = require("mongoose");
+const { normalizeCompanyName } = require("../companyName");
 
 const companySchema = new mongoose.Schema(
   {
@@ -43,6 +44,12 @@ const companySchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      validate: { validator: (name) => Boolean(name?.trim()), message: "Company name cannot be blank" },
+    },
+
+    company_name_key: {
+      type: String,
+      select: false,
     },
 
     company_email: {
@@ -251,5 +258,19 @@ const companySchema = new mongoose.Schema(
 // ─── Indexes ──────────────────────────────────────────────────
 companySchema.index({ org_id: 1, is_deleted: 1 });
 companySchema.index({ status: 1, is_deleted: 1 });
+companySchema.index(
+  { org_id: 1, company_name_key: 1 },
+  {
+    unique: true,
+    name: "unique_active_company_name_per_org",
+    partialFilterExpression: { is_deleted: false, company_name_key: { $type: "string" } },
+  }
+);
+
+companySchema.pre("validate", function () {
+  if (typeof this.company_name === "string") {
+    this.company_name_key = normalizeCompanyName(this.company_name);
+  }
+});
 
 module.exports = mongoose.model("Company", companySchema);

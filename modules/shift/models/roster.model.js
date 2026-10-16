@@ -1,17 +1,17 @@
 // modules/shift/models/roster.model.js
 //
-// Roster = employee ko shift assign karna for a date range.
+// Roster = an employee's shift assignment for a date range.
 //
 // How it works:
-//   - HR creates a roster entry: "Rahul ko Night Shift, June 1 se June 30 tak"
-//   - attendance.service.js punchIn pe check karta hai:
-//       1. Kya is employee ka aaj ke liye active roster hai?
-//       2. Hai → us shift ka startTime use karo
-//       3. Nahi → unit ka isDefault:true shift lo
-//       4. Default bhi nahi → AttendancePolicy ka workingHours fallback
+//   - HR creates a roster entry assigning Rahul to the Night Shift from June 1 to June 30.
+//   - On punch-in, attendance.service.js checks:
+//       1. Does this employee have an active roster for today?
+//       2. If so, use that shift's startTime.
+//       3. Otherwise, use the unit's isDefault:true shift.
+//       4. If there is no default shift, fall back to AttendancePolicy's workingHours.
 //
 // Multiple rosters can exist for one employee (different date ranges).
-// Overlapping date ranges: service layer check karega on create.
+// Overlapping date ranges: checked by the service layer on creation.
 //
 // Active roster query:
 //   Roster.findOne({
@@ -128,7 +128,7 @@ const rosterSchema = new Schema(
 // ─── Indexes ─────────────────────────────────────────────────
 
 // PRIMARY — attendance.service.js uses this on every punch-in
-// "Kya is employee ka aaj ke liye active roster hai?"
+// "Does this employee have an active roster for today?"
 rosterSchema.index({
   employee_id: 1,
   unit_id:     1,
@@ -137,7 +137,7 @@ rosterSchema.index({
   is_deleted:  1,
 });
 
-// Calendar view — HR dekhe kaun kis shift pe hai is month
+// Calendar view — HR can see each employee's shift assignments for the month
 rosterSchema.index({
   unit_id:    1,
   startDate:  1,
@@ -145,7 +145,7 @@ rosterSchema.index({
   is_deleted: 1,
 });
 
-// Employee apna roster dekhe
+// Employee can view their own roster
 rosterSchema.index({ employee_id: 1, status: 1, is_deleted: 1 });
 
 module.exports = mongoose.model("Roster", rosterSchema);

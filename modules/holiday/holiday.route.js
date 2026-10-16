@@ -7,7 +7,7 @@ const { authenticate } = require("../../middlewares/auth.middleware");
 const checkPermission  = require("../../middlewares/permission.middleware");
 
 // ── Company Holiday CRUD ──────────────────────────────────
-// ── Master List + Import — PEHLE rakhho ──────────────────
+// ── Master List + Import — place first ──────────────────
 router.get(  "/master",                     authenticate, checkPermission("holiday.read"),    controller.getMasterHolidays);
 router.post( "/master",                     authenticate, checkPermission("holiday.create"), controller.createMasterHoliday);
 router.patch( "/master/:id",                 authenticate, checkPermission("holiday.update"), controller.updateMasterHoliday);
@@ -15,7 +15,7 @@ router.patch( "/master/:id/toggle",          authenticate, checkPermission("holi
 router.delete("/master/:id",                 authenticate, checkPermission("holiday.delete"), controller.deleteMasterHoliday);
 router.post( "/import",                     authenticate, checkPermission("holiday.create"), controller.importHolidays);
 
-// ── Company Holiday CRUD — BAAD MEIN ─────────────────────
+// ── Company Holiday CRUD — place afterward ───────────────
 router.post(  "/",    authenticate, checkPermission("holiday.create"), controller.createHoliday);
 router.get(   "/",    authenticate, checkPermission("holiday.read"),   controller.listHolidays);
 router.get(   "/:id", authenticate, checkPermission("holiday.read"),   controller.getHoliday);

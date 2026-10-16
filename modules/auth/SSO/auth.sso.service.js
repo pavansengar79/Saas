@@ -24,6 +24,7 @@ const SSOState = require('./models/sso-state.model');
 const jwt = require('jsonwebtoken');
 const AppError = require('../../../utils/appError');
 const { generateRandomToken } = require('../../../utils/crypto');
+const { assertPlanAllowsCompanyRoles } = require('../../../utils/companyRoleEntitlement');
 
 // Initialize WorkOS client (optional - gracefully handle missing credentials)
 let workos = null;
@@ -229,6 +230,12 @@ const handleCallback = async (code, state) => {
     
     if (!role) {
       throw new AppError('Default role not found. Contact administrator.', 500);
+    }
+
+    if (role.level === 'company') {
+      await assertPlanAllowsCompanyRoles(ssoState.org_id);
+      // JIT has no company context; it cannot create a usable company admin.
+      throw new AppError('A company is required for a company-level role', 400);
     }
 
     user = new User({

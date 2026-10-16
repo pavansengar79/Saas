@@ -1,20 +1,20 @@
 // modules/shift/models/shift.model.js
 //
-// Shift = ek kaam ka time block (Day Shift, Night Shift, General etc.)
+// Shift = a scheduled work period (Day Shift, Night Shift, General, etc.)
 //
 // Hierarchy context:
 //   Shift belongs to a Unit (unit_id required).
-//   Company Admin / Unit Admin shifts create karte hain.
-//   Employees rosters ke through shifts se linked hote hain.
+//   Company Admins / Unit Admins create shifts.
+//   Employees are assigned shifts through rosters.
 //
 // Key design decisions:
-//   - isDefault: true = agar employee ka roster nahi mila toh yeh shift use hogi
-//   - Sirf ek hi shift isDefault: true ho sakti hai per unit (service layer enforce karega)
+//   - isDefault: true = use this shift if the employee has no roster
+//   - Only one shift per unit can have isDefault: true (enforced by the service layer)
 //   - applicableDays: ["MON","TUE","WED","THU","FRI"] — which days this shift runs
 //   - startTime / endTime: "HH:MM" 24-hour format string (e.g. "09:00", "21:00")
-//     String rakha hai — timezone handling frontend pe, backend pure HH:MM compare karta hai
-//   - gracePeriodMinutes: punch-in ko itne minute late tak LATE nahi maana jaayega
-//   - halfDayThresholdMinutes: itne ghante kaam kiya toh HALF_DAY (default 240 = 4 hrs)
+//     Stored as strings — the frontend handles time zones; the backend compares HH:MM values
+//   - gracePeriodMinutes: minutes after the start time before a punch-in counts as LATE
+//   - halfDayThresholdMinutes: minimum minutes worked to count as HALF_DAY (default 240 = 4 hours)
 
 const mongoose = require("mongoose");
 const { Schema } = mongoose;

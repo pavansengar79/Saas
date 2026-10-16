@@ -1,5 +1,5 @@
 // middlewares/customerAuthenticate.middleware.js
-// Customer JWT validate karta hai (alag from User JWT)
+// Validates the customer JWT (separate from the user JWT)
 
 const jwt      = require("jsonwebtoken");
 const Customer = require("../modules/customer/models/customer.model");

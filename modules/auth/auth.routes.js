@@ -33,7 +33,7 @@ router.get("/google", (req, res, next) => {
   passport.authenticate("google", {
     scope:   ["email", "profile"],
     session: false,
-    state:   returnUrl  // ✅ returnUrl ko state mein pass karo
+    state:   returnUrl  // ✅ Pass returnUrl as the state parameter
   })(req, res, next);
 });
 
@@ -62,7 +62,7 @@ const changePasswordController = require("./auth.changePassword.controller");
 const { changePasswordSchema } = require("../../validations/auth.validations");
 router.post("/change-password", authenticate, validate(changePasswordSchema), changePasswordController.changePassword);
 
-// Company details submit — naye user ke liye
+// Submit company details for a new user
 router.post("/complete-registration", authController.completeRegistration);
 router.patch("/me", authenticate, authController.updateMe);
 

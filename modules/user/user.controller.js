@@ -53,7 +53,7 @@ exports.updateUser = async (req, res, next) => {
 // ── DELETE /users/:id ─────────────────────────────────────────
 exports.deleteUser = async (req, res, next) => {
   try {
-    const result = await userService.deleteUser(req.params.id, req.user);
+    const result = await userService.deleteUser(req.params.id, req.user, req.body?.confirmCompanyAdminDeactivation);
 
     res.json({
       success: true,

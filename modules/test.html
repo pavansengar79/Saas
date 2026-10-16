@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>THE SEARCH HOUSE | Internal Test Logins</title>
+  <style>
+    :root {
+      --ink: #17211b;
+      --muted: #5f6b63;
+      --paper: #f5f2e9;
+      --surface: #fffdf7;
+      --line: #d5d2c7;
+      --green: #245b47;
+      --green-soft: #dbe9df;
+      --gold: #c99437;
+      --blue: #275d77;
+      --red: #8d3f35;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(36, 91, 71, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(36, 91, 71, 0.035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 24px 24px;
+      font-family: Avenir, "Avenir Next", "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 32px auto;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: 0 18px 50px rgba(23, 33, 27, 0.1);
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 24px;
+      align-items: end;
+      padding: 32px;
+      color: white;
+      background: var(--green);
+      border-bottom: 5px solid var(--gold);
+    }
+
+    h1, h2 { font-family: Georgia, "Times New Roman", serif; }
+    h1 { margin: 4px 0 0; font-size: clamp(28px, 4vw, 46px); line-height: 1.05; }
+    h2 { margin: 0 0 16px; font-size: 22px; }
+    p { margin: 0; }
+
+    .eyebrow {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: #d9e8de;
+    }
+
+    .print-button {
+      padding: 10px 16px;
+      border: 1px solid rgba(255, 255, 255, 0.55);
+      border-radius: 4px;
+      color: white;
+      background: transparent;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .print-button:hover { background: rgba(255, 255, 255, 0.12); }
+
+    .content { padding: 28px 32px 36px; }
+
+    .access-strip {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 1px;
+      margin-bottom: 28px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--line);
+    }
+
+    .access-item {
+      padding: 16px 18px;
+      background: white;
+    }
+
+    .access-item strong,
+    .access-item a {
+      display: block;
+      margin-top: 4px;
+      color: var(--ink);
+      font-weight: 750;
+      overflow-wrap: anywhere;
+    }
+
+    .access-item a { color: var(--blue); }
+
+    .label {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .hierarchy {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+
+    .hierarchy span {
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: white;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .hierarchy b { color: var(--gold); }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 880px;
+      table-layout: fixed;
+      background: white;
+    }
+
+    th, td {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: white;
+      background: var(--ink);
+      font-size: 11px;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #f8f7f1; }
+
+    .step {
+      display: inline-grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 50%;
+      color: white;
+      background: var(--green);
+      font-weight: 800;
+    }
+
+    .email, .password {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .role {
+      display: inline-block;
+      padding: 3px 7px;
+      border-radius: 3px;
+      color: var(--green);
+      background: var(--green-soft);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .note {
+      margin-top: 22px;
+      padding: 16px 18px;
+      border-left: 4px solid var(--gold);
+      background: #faf4e6;
+    }
+
+    .warning {
+      margin-top: 14px;
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    footer {
+      padding: 18px 32px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 720px) {
+      main { width: 100%; margin: 0; border: 0; }
+      header { grid-template-columns: 1fr; padding: 24px 20px; }
+      .print-button { justify-self: start; }
+      .content { padding: 22px 16px 28px; }
+      .access-strip { grid-template-columns: 1fr; }
+      footer { padding: 16px; }
+    }
+
+    @media print {
+      body { background: white; }
+      main { width: 100%; margin: 0; border: 0; box-shadow: none; }
+      .print-button { display: none; }
+      .content { padding: 22px 0; }
+      header { padding: 22px; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      table { min-width: 0; font-size: 10px; }
+      th, td { padding: 8px; }
+      footer { padding: 14px 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">Internal testing handover</p>
+        <h1>THE SEARCH HOUSE</h1>
+      </div>
+      <button class="print-button" type="button" onclick="window.print()">Print / Save PDF</button>
+    </header>
+
+    <div class="content">
+      <section class="access-strip" aria-label="Test access details">
+        <div class="access-item">
+          <span class="label">Login URL</span>
+          <a href="https://2s24z27j-3001.inc1.devtunnels.ms/auth/login/">Open HRMS login</a>
+        </div>
+        <div class="access-item">
+          <span class="label">Shared password</span>
+          <strong class="password">Test@1234</strong>
+        </div>
+        <div class="access-item">
+          <span class="label">Plan</span>
+          <strong>Custom</strong>
+        </div>
+      </section>
+
+      <section aria-labelledby="structure-heading">
+        <h2 id="structure-heading">Organization structure</h2>
+        <div class="hierarchy">
+          <span>THE SEARCH HOUSE</span><b>→</b>
+          <span>THE SEARCH HOUSE Company</span><b>→</b>
+          <span>IT &amp; Consulting</span><b>→</b>
+          <span>Beno Technology</span>
+        </div>
+      </section>
+
+      <section aria-labelledby="accounts-heading">
+        <h2 id="accounts-heading">Login order and accounts</h2>
+        <div class="table-wrap">
+          <table>
+            <colgroup>
+              <col style="width: 6%">
+              <col style="width: 13%">
+              <col style="width: 14%">
+              <col style="width: 12%">
+              <col style="width: 15%">
+              <col style="width: 13%">
+              <col style="width: 19%">
+              <col style="width: 8%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Name</th>
+                <th>Access Role</th>
+                <th>Job Role</th>
+                <th>Department</th>
+                <th>Reports To</th>
+                <th>Email</th>
+                <th>Password</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="step">1</span></td>
+                <td><strong>Abinesh Pratap Singh</strong></td>
+                <td><span class="role">Organization Admin</span></td>
+                <td>Managing Director</td>
+                <td>Executive Leadership</td>
+                <td>Top level</td>
+                <td class="email">abinesh.pratap.singh@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">2</span></td>
+                <td><strong>Pavan Sengar</strong></td>
+                <td><span class="role">Company Admin</span></td>
+                <td>Group CEO</td>
+                <td>Executive Leadership</td>
+                <td>Abinesh Pratap Singh</td>
+                <td class="email">pavan.sengar@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">3</span></td>
+                <td><strong>Lawrance Lucus</strong></td>
+                <td><span class="role">Unit Admin</span></td>
+                <td>Unit Administrator</td>
+                <td>Administration</td>
+                <td>Pavan Sengar</td>
+                <td class="email">lawrance.lucus@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">4</span></td>
+                <td><strong>Chetan</strong></td>
+                <td><span class="role">HR Manager</span></td>
+                <td>HR Manager</td>
+                <td>Human Resources</td>
+                <td>Lawrance Lucus</td>
+                <td class="email">chetan@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">5</span></td>
+                <td><strong>Rajat</strong></td>
+                <td><span class="role">Manager</span></td>
+                <td>IT Manager</td>
+                <td>Information Technology</td>
+                <td>Lawrance Lucus</td>
+                <td class="email">rajat@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">6</span></td>
+                <td><strong>Vibhav</strong></td>
+                <td><span class="role">Employee</span></td>
+                <td>Software Engineer</td>
+                <td>Information Technology</td>
+                <td>Rajat</td>
+                <td class="email">vibhav@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">7</span></td>
+                <td><strong>Prakhar Shukla</strong></td>
+                <td><span class="role">Employee</span></td>
+                <td>Intern</td>
+                <td>Information Technology</td>
+                <td>Rajat</td>
+                <td class="email">prakhar@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">8</span></td>
+                <td><strong>Manoj</strong></td>
+                <td><span class="role">Manager</span></td>
+                <td>Marketing Head</td>
+                <td>Marketing</td>
+                <td>Lawrance Lucus</td>
+                <td class="email">manoj@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">9</span></td>
+                <td><strong>Neeraj Kumar</strong></td>
+                <td><span class="role">Employee</span></td>
+                <td>Senior Bid Executive</td>
+                <td>Business Development</td>
+                <td>Manoj</td>
+                <td class="email">neeraj.kumar@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">10</span></td>
+                <td><strong>Himanshu Rastogi</strong></td>
+                <td><span class="role">Employee</span></td>
+                <td>Accountant</td>
+                <td>Finance &amp; Accounts</td>
+                <td>Lawrance Lucus</td>
+                <td class="email">himanshu.rastogi@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">11</span></td>
+                <td><strong>Akshay</strong></td>
+                <td><span class="role">Employee</span></td>
+                <td>Graphic Designer</td>
+                <td>Marketing</td>
+                <td>Manoj</td>
+                <td class="email">akshay@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">12</span></td>
+                <td><strong>Prakhar Chaudhry</strong></td>
+                <td><span class="role">Employee</span></td>
+                <td>Backend Developer</td>
+                <td>Information Technology</td>
+                <td>Rajat</td>
+                <td class="email">prakhar.chaudhry@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+              <tr>
+                <td><span class="step">13</span></td>
+                <td><strong>Anuranjan Singh</strong></td>
+                <td><span class="role">Manager</span></td>
+                <td>Business Development Head</td>
+                <td>Sales</td>
+                <td>Lawrance Lucus</td>
+                <td class="email">anuranjan.singh@the-search-house.example.com</td>
+                <td class="password">Test@1234</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="note">
+        <strong>Testing note:</strong> All 13 employees belong to <strong>Beno Technology</strong>.
+        The <strong>Cloud Think</strong> unit is intentionally empty for empty-state testing.
+      </aside>
+      <p class="warning">Internal testing only. Do not share these credentials outside the product team.</p>
+    </div>
+
+    <footer>Prepared for product testing · 16 September 2026</footer>
+  </main>
+</body>
+</html>

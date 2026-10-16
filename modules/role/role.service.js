@@ -16,6 +16,7 @@ const Permission = require("../permission/permission.model");
 const User       = require("../auth/models/user.model");
 const AppError   = require("../../utils/appError");
 const { slugifyRoleName, SLUG_MAX_LENGTH } = require("../../utils/roleSlug");
+const { assertPlanAllowsCompanyRoles } = require("../../utils/companyRoleEntitlement");
 
 // ─── Allowed scopes per user level ───────────────────────────
 const ALLOWED_SCOPES = {
@@ -48,7 +49,7 @@ const validatePermissionScope = (permDocs, userLevel) => {
   for (const perm of permDocs) {
     const permScope = perm.scope || [];
 
-    // Check karo — kya is permission ka koi scope user ke allowed scopes mein hai
+    // Check whether any permission scope is within the user's allowed scopes
     const canAssign = permScope.some(s => allowedScopes.includes(s));
 
     if (!canAssign) {
@@ -107,6 +108,10 @@ exports.createRole = async (payload, user) => {
     }
   }
 
+  if (roleLevel === "company" && user.role !== "SUPER_ADMIN") {
+    await assertPlanAllowsCompanyRoles(user.orgId);
+  }
+
   // Duplicate name check — same org (case-insensitive)
   const escapedName = String(name).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const sameName = await Role.findOne({
@@ -158,7 +163,7 @@ exports.createRole = async (payload, user) => {
 //   return await Role.find({
 //     isDeleted: false,
 //     $or: [
-//       { org_id: user.orgId },          // org ke custom roles
+//       { org_id: user.orgId },          // custom roles for the org
 //       { org_id: null, isSystem: true } // system roles
 //     ]
 //   }).populate("permissions", "name slug module scope");
@@ -193,7 +198,7 @@ exports.getRoles = async (user) => {
     isDeleted: false,
     level:     { $in: allowedLevels },
     $or: [
-      { org_id: user.orgId },          // org ke custom roles
+      { org_id: user.orgId },          // custom roles for the org
       { org_id: null, isSystem: true } // system roles
     ]
   };
@@ -309,7 +314,7 @@ exports.deleteRole = async (roleId, user) => {
 };
 
 // ─── GET AVAILABLE PERMISSIONS ────────────────────────────────
-// Frontend use karega — role create/edit form mein permissions dropdown
+// Used by the frontend permissions dropdown on the role create/edit form
 // Returns only permissions that user is allowed to assign
 exports.getAssignablePermissions = async (user) => {
   if (user.role === "SUPER_ADMIN") {
@@ -320,7 +325,7 @@ exports.getAssignablePermissions = async (user) => {
 
   const allowedScopes = ALLOWED_SCOPES[user.level] || [];
 
-  // Sirf wahi permissions jo user assign kar sakta hai
+  // Only permissions the user is allowed to assign
   return await Permission.find({
     is_active: true,
     scope:     { $in: allowedScopes },

@@ -26,8 +26,8 @@ exports.initializeBalance = Joi.object({
     .default(new Date().getFullYear())
     .optional(),
 
-  // HR default se override kar sakta hai
-  // null bheja toh LeaveType ka defaultDaysPerYear use hoga
+  // HR can override the default
+  // If null is sent, use LeaveType's defaultDaysPerYear
   totalAllocated: Joi.number()
     .min(0)
     .max(366)

@@ -12,7 +12,9 @@ const LeaveBalance = require("../leave/models/leaveBalance.models");
 const LeaveRequest = require("../leave/models/leaveRequest.models");
 const regularisationPolicyService = require("./regularisationPolicy.service");
 const { resolveAttendancePolicy } = require("../../utils/policyResolver");
-const { calculatePolicyOvertime } = require("./overtimeCalculator");
+const CompanyConfig = require('../companyConfig/models/companyConfig.model');
+const { correctAttendanceTimes } = require('./correctedAttendance');
+const moment = require('moment-timezone');
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
@@ -60,8 +62,12 @@ const resolveRegularizationApprovers = async (employee, user, approvalFlow) => {
 };
 // ─── Helper: recalculate attendance after approval ────────────
 const recalculateAttendance = async (request, approvedBy) => {
-  const date = new Date(request.date);
-  date.setUTCHours(0, 0, 0, 0);
+  const config = await CompanyConfig.findOne({ org_id: request.org_id, company_id: request.company_id })
+    .select('timezone overtimeEnabled overtimeThresholdHours').lean();
+  const timezone = config?.timezone || 'Asia/Kolkata';
+  // Request dates are calendar dates stored at UTC midnight, whereas attendance
+  // dates are midnight in the organisation's timezone.
+  const date = moment.tz(moment.utc(request.date).format('YYYY-MM-DD'), 'YYYY-MM-DD', timezone).toDate();
 
   let attendance = await Attendance.findOne({
     employeeId: request.employeeId,
@@ -91,8 +97,6 @@ const recalculateAttendance = async (request, approvedBy) => {
     });
   } else {
     // Update existing
-    if (request.requestedCheckIn)  attendance.checkIn  = request.requestedCheckIn;
-    if (request.requestedCheckOut) attendance.checkOut = request.requestedCheckOut;
     if (request.requestedStatus)   attendance.status   = request.requestedStatus;
     attendance.isRegularized = true;
     attendance.regularizedBy = toObjId(approvedBy);
@@ -100,39 +104,16 @@ const recalculateAttendance = async (request, approvedBy) => {
     attendance.remarks       = `Regularized — Request ID: ${request._id}`;
   }
 
-  // Recalculate workingHours
-  if (attendance.checkIn && attendance.checkOut) {
-    const attendancePolicy = await resolveAttendancePolicy(
-      request.employeeId.toString(),
-      request.company_id.toString(),
-      request.unit_id?.toString() || null
-    );
-    const diffMs = new Date(attendance.checkOut) - new Date(attendance.checkIn);
-    attendance.workingHours = parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2));
-    const extra = attendance.workingHours - (attendance.standardHours || 8);
-    attendance.overtimeHours = calculatePolicyOvertime(extra, attendancePolicy.overtime);
-
-    // Status based on hours
+  const attendancePolicy = await resolveAttendancePolicy(
+    request.employeeId.toString(), request.company_id.toString(), request.unit_id?.toString() || null
+  );
+  correctAttendanceTimes(attendance, request.requestedCheckIn, request.requestedCheckOut,
+    timezone, config, attendancePolicy);
+  if (attendance.workingHours !== null && !['ON_LEAVE', 'ABSENT', 'HOLIDAY', 'WEEKEND'].includes(request.requestedStatus)) {
     if (attendance.workingHours >= (attendance.standardHours || 8)) {
-      attendance.status = attendance.isWFH ? "WFH" : "PRESENT";
-    } else if (attendance.workingHours >= 4) {
-      attendance.status = "HALF_DAY";
-    }
-
-    // Late check
-    if (attendance.checkIn && attendance.shiftStart) {
-      const [sh, sm] = attendance.shiftStart.split(":").map(Number);
-      const shiftStartMs = sh * 60 + sm;
-      const ciDate = new Date(attendance.checkIn);
-      const ciMs   = ciDate.getUTCHours() * 60 + ciDate.getUTCMinutes();
-      const lateMinutes = ciMs - shiftStartMs - (attendance.graceMinutes || 15);
-      if (lateMinutes > 0) {
-        attendance.isLate     = true;
-        attendance.lateMinutes = lateMinutes;
-      } else {
-        attendance.isLate     = false;
-        attendance.lateMinutes = 0;
-      }
+      attendance.status = attendance.isWFH ? 'WFH' : 'PRESENT';
+    } else if (attendance.workingHours >= (attendance.halfDayThreshold || 4)) {
+      attendance.status = 'HALF_DAY';
     }
   }
   // ─── LWP / Leave handling ────────────────────────────────────
@@ -148,7 +129,7 @@ const recalculateAttendance = async (request, approvedBy) => {
     const hasBalance = balance && balance.remaining >= 1;
 
     if (hasBalance) {
-      // Balance hai — deduct karo + leave request auto create
+      // Balance available — deduct it and automatically create a leave request
       balance.used      += 1;
       balance.remaining -= 1;
       await balance.save();
@@ -168,15 +149,15 @@ const recalculateAttendance = async (request, approvedBy) => {
         isAutoCreated: true,
       });
 
-      // isLWP false rakho
+      // Keep isLWP false
       request.isLWP = false;
 
     } else {
-      // Balance nahi — LWP
+      // No balance available — LWP
       request.isLWP = true;
 
-      // Attendance pe LWP mark karo
-      attendance.isLWP  = true;  // Attendance model mein bhi field add karni hogi
+      // Mark attendance as LWP
+      attendance.isLWP  = true;  // The attendance model also needs this field
     }
   }
 
@@ -237,7 +218,7 @@ exports.applyRegularization = async (payload, user) => {
     targetEmployeeId,
   } = payload;
 
-  // AT-14 — HR/Unit Admin hi kisi aur ke liye raise kar sakta hai
+  // AT-14 — Only HR/Unit Admin can raise a request on someone else's behalf
   const isOnBehalf = !!targetEmployeeId;
   if (isOnBehalf) {
     const allowedRoles = ["hr_manager", "unit_admin", "company_admin", "org_admin"];
@@ -292,6 +273,10 @@ exports.applyRegularization = async (payload, user) => {
 
   const employeeUserId = employee.userId || (!isOnBehalf ? user.userId : null);
   if (!employeeUserId) throw new AppError("Employee user account is not linked", 400);
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: employee.company_id })
+    .select('timezone').lean();
+  const attendanceDate = moment.tz(moment.utc(reqDate).format('YYYY-MM-DD'), 'YYYY-MM-DD',
+    companyConfig?.timezone || 'Asia/Kolkata').toDate();
   const scopedUser = {
     ...user,
     companyId: employee.company_id,
@@ -344,7 +329,7 @@ exports.applyRegularization = async (payload, user) => {
   const attendance = await Attendance.findOne({
     employeeId: employee._id,
     org_id:     toObjId(user.orgId),
-    date:       reqDate,
+    date:       attendanceDate,
   }).lean();
 
   // Approvers resolve
@@ -398,7 +383,7 @@ exports.applyRegularization = async (payload, user) => {
     await request.save();
   }
 
-  // N-05 — Approver ko notification
+  // N-05 — Notify the approver
   const notifyUserId = autoApproval.autoApprove ? null : l1ApproverId || l2ApproverId;
   if (notifyUserId) {
     Notification.create({
@@ -406,7 +391,7 @@ exports.applyRegularization = async (payload, user) => {
       userId:  notifyUserId,
       type:    "REGULARIZATION_APPLIED",
       title:   "New Regularisation Request",
-      message: `${employee.name} ne ${date} ke liye regularisation request ki hai`,
+      message: `${employee.name} submitted a regularisation request for ${date}.`,
       meta: {
         regularizationId: request._id,
         employeeId:       employee._id,
@@ -415,14 +400,14 @@ exports.applyRegularization = async (payload, user) => {
     }).catch(() => {});
   }
 
-  // HR on behalf — employee ko bhi notify karo
+  // HR acting on behalf of an employee — notify the employee too
   if (isOnBehalf) {
     Notification.create({
       org_id:  toObjId(user.orgId),
       userId:  request.userId,
       type:    "REGULARIZATION_APPLIED",
       title:   "Regularisation Request Raised on Your Behalf",
-      message: `HR ne tumhari taraf se ${date} ke liye regularisation request raise ki hai`,
+      message: `HR submitted a regularisation request on your behalf for ${date}.`,
       meta:    { regularizationId: request._id, date },
     }).catch(() => {});
   }
@@ -480,15 +465,15 @@ exports.getPendingApprovals = async (query, user) => {
   };
 
   if (user.role === "manager") {
-    // L1 — sirf PENDING
+    // L1 — PENDING only
     filter.l1ApproverId = toObjId(user.userId);
     filter.status       = "PENDING";
   } else if (user.role === "hr_manager") {
-    // L2 — PENDING (L2_ONLY flow) ya UNDER_REVIEW (L1_L2 flow) dono
+    // L2 — both PENDING (L2_ONLY flow) and UNDER_REVIEW (L1_L2 flow)
     filter.l2ApproverId = toObjId(user.userId);
     filter.status       = { $in: ["PENDING", "UNDER_REVIEW"] };
   } else {
-    // Unit Admin / higher — apni unit ki sab requests
+    // Unit Admin / higher — all requests from their unit
     filter.unit_id = toObjId(user.unitId);
     if (status) filter.status = status;
   }
@@ -551,13 +536,13 @@ exports.updateStatus = async (requestId, payload, user) => {
       request.status = "REJECTED";
       await request.save();
 
-      // Employee ko notify karo
+      // Notify the employee
       Notification.create({
         org_id:  request.org_id,
         userId:  request.userId,
         type:    "REGULARIZATION_REJECTED",
         title:   "Regularisation Request Rejected",
-        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request reject ho gayi`,
+        message: `Your regularisation request for ${new Date(request.date).toDateString()} has been rejected.`,
         meta:    { regularizationId: request._id },
       }).catch(() => {});
 
@@ -571,7 +556,7 @@ exports.updateStatus = async (requestId, payload, user) => {
         userId:  request.l2ApproverId,
         type:    "REGULARIZATION_APPLIED",
         title:   "Regularisation Request Pending Your Approval",
-        message: `Ek regularisation request aapke approval ke liye aayi hai`,
+        message: "A regularisation request is awaiting your approval.",
         meta:    { regularizationId: request._id },
       }).catch(() => {});
 
@@ -595,7 +580,7 @@ exports.updateStatus = async (requestId, payload, user) => {
         userId:  request.userId,
         type:    "REGULARIZATION_APPROVED",
         title:   "Regularisation Request Approved",
-        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request approve ho gayi`,
+        message: `Your regularisation request for ${new Date(request.date).toDateString()} has been approved.`,
         meta:    { regularizationId: request._id },
       }).catch(() => {});
     }
@@ -629,7 +614,7 @@ exports.updateStatus = async (requestId, payload, user) => {
         userId:  request.userId,
         type:    "REGULARIZATION_REJECTED",
         title:   "Regularisation Request Rejected",
-        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request reject ho gayi`,
+        message: `Your regularisation request for ${new Date(request.date).toDateString()} has been rejected.`,
         meta:    { regularizationId: request._id },
       }).catch(() => {});
 
@@ -651,7 +636,7 @@ exports.updateStatus = async (requestId, payload, user) => {
         userId:  request.userId,
         type:    "REGULARIZATION_APPROVED",
         title:   "Regularisation Request Approved",
-        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request approve ho gayi`,
+        message: `Your regularisation request for ${new Date(request.date).toDateString()} has been approved.`,
         meta:    { regularizationId: request._id },
       }).catch(() => {});
     }
@@ -686,7 +671,7 @@ exports.updateStatus = async (requestId, payload, user) => {
         userId:  request.userId,
         type:    "REGULARIZATION_REJECTED",
         title:   "Regularisation Request Rejected",
-        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request reject ho gayi`,
+        message: `Your regularisation request for ${new Date(request.date).toDateString()} has been rejected.`,
         meta:    { regularizationId: request._id },
       }).catch(() => {});
 
@@ -708,7 +693,7 @@ exports.updateStatus = async (requestId, payload, user) => {
         userId:  request.userId,
         type:    "REGULARIZATION_APPROVED",
         title:   "Regularisation Request Approved",
-        message: `Tumhari ${new Date(request.date).toDateString()} ki regularisation request approve ho gayi`,
+        message: `Your regularisation request for ${new Date(request.date).toDateString()} has been approved.`,
         meta:    { regularizationId: request._id },
       }).catch(() => {});
     }

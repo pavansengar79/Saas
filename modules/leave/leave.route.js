@@ -23,9 +23,9 @@ const requireUnitLevel = (req, res, next) => {
   return next();
 };
 
-// ── SPECIFIC routes PEHLE (/:id se pehle hona chahiye) ───────────────────────
+// ── SPECIFIC routes FIRST (must come before /:id) ────────────────────────────
 
-// GET /leave/balances/my  ← /:id se UPAR hona chahiye
+// GET /leave/balances/my  ← must be above /:id
 // Dynamic balance calculation from active policy
 router.get(
   "/balances/my",
@@ -52,7 +52,7 @@ router.post(
   leaveController.applyLeave
 );
 
-// GET /leave  — all leave requests (employee: apni, HR: unit ki)
+// GET /leave  — all leave requests (employee: their own, HR: their unit's)
 router.get(
   "/",
   checkPermission("leave.read"),
@@ -87,14 +87,14 @@ router.get(
   leaveController.getLeaveRequestById
 );
 
-// PATCH /leave/:id/toggle-status  ← /:id se PEHLE
+// PATCH /leave/:id/toggle-status  ← before /:id
 router.patch(
   "/:id/toggle-status",
   checkPermission("leave.update"),
   leaveController.toggleStatus
 );
 
- // PATCH /leave/:id/edit — employee apni pending leave edit kare
+ // PATCH /leave/:id/edit — employee edits their own pending leave
  router.patch(
   "/:id/edit",
  checkPermission("leave.create"),

@@ -23,6 +23,7 @@ const EmployeeDocument = require("./models/employeeDocument.model");
 const Subscription = require("../subscription/models/subscription.Models"); // T-27
 const auditService = require("../auditLogs/auditLog.service");
 const Roster        = require("../shift/models/roster.model"); // CRITICAL: import Roster for cascade delete
+const { assertPlanAllowsCompanyRoles } = require("../../utils/companyRoleEntitlement");
 
 // ─── Helper — normalize phone number ──────────────────────────
 // Removes +91 prefix, removes leading 0, keeps only 10 digits
@@ -52,7 +53,7 @@ const buildScopeFilter = (user) => {
   return filter;
 };
 
-// ─── Helper — employeeId generate ─────────────────────────────
+// ─── Helper — generate employeeId ─────────────────────────────
 // BUG-09 fix: use last employeeId number instead of count
 // count causes duplicates when employees are deleted or sequence gaps exist
 const generateEmployeeId = async (org_id, company_id) => {
@@ -72,7 +73,7 @@ const generateEmployeeId = async (org_id, company_id) => {
   return `EMP${padded}`;
 };
 
-// ─── Helper — salary calculate ────────────────────────────────
+// ─── Helper — calculate salary ────────────────────────────────
 const calculateSalary = (salary) => {
   const grossSalary =
     (salary.basic            || 0) +
@@ -119,7 +120,7 @@ exports.createEmployee = async (payload, user) => {
   const employeeUnitId = unit_id || user.unitId;
   if (!employeeUnitId) throw new AppError("unit_id is required", 400);
 
-  // Email duplicate check — same company mein
+  // Check for duplicate email addresses within the same company
   const existing = await Employee.findOne({
     email,
     org_id:     user.orgId,
@@ -161,10 +162,10 @@ exports.createEmployee = async (payload, user) => {
     }
   }
 
-  // EmployeeId generate
+  // Generate employeeId
   const employeeId = await generateEmployeeId(user.orgId, user.companyId);
 
-  // Salary calculate
+  // Calculate salary
   const calculatedSalary = salary ? calculateSalary(salary) : undefined;
 
   // Normalize phone number - extract +91 if present
@@ -322,6 +323,8 @@ exports.updateEmployee = async (id, data, user) => {
 
   const employee = await Employee.findOne(filter);
   if (!employee) throw new AppError("Employee not found", 404);
+  const { confirmCompanyAdminDeactivation } = data;
+  delete data.confirmCompanyAdminDeactivation;
   const isOwnRecord = employee.userId && String(employee.userId) === String(user.userId);
   if (isOwnRecord && data.status && data.status !== employee.status) {
     throw new AppError("You cannot change your own employment status", 400);
@@ -410,6 +413,13 @@ exports.updateEmployee = async (id, data, user) => {
     }
     if (data.status === "TERMINATED" && !data.exitDate && !employee.exitDate) {
       throw new AppError("Exit date is required when terminating employee", 400);
+    }
+    if (employee.userId) {
+      const { mapEmployeeStatusToUser } = require('../../utils/statusSync');
+      const { assertCompanyAdminDeactivationConfirmed } = require('../../utils/companyAdminStatusGuard');
+      await assertCompanyAdminDeactivationConfirmed(
+        employee.userId, mapEmployeeStatusToUser(data.status), confirmCompanyAdminDeactivation
+      );
     }
   }
 
@@ -521,7 +531,7 @@ exports.updateEmployee = async (id, data, user) => {
 };
 
 // ─── DELETE ───────────────────────────────────────────────────
-exports.deleteEmployee = async (id, user) => {
+exports.deleteEmployee = async (id, user, confirmCompanyAdminDeactivation = false) => {
   const filter = { _id: id, isDeleted: false, ...buildScopeFilter(user) };
 
   const employee = await Employee.findOne(filter);
@@ -537,6 +547,8 @@ exports.deleteEmployee = async (id, user) => {
   }
 
   if (employee.userId) {
+    const { assertCompanyAdminDeactivationConfirmed } = require('../../utils/companyAdminStatusGuard');
+    await assertCompanyAdminDeactivationConfirmed(employee.userId, 'INACTIVE', confirmCompanyAdminDeactivation);
     await User.findByIdAndUpdate(employee.userId, { status: "INACTIVE" });
   }
 
@@ -574,16 +586,36 @@ exports.activateLogin = async (id, payload, user) => {
     );
   }
 
-  const role = await Role.findOne({ _id: roleId, isDeleted: false });
+  const role = await Role.findOne({
+    _id: roleId,
+    isDeleted: false,
+    $or: [{ org_id: user.orgId }, { org_id: null, isSystem: true }],
+  });
   if (!role) throw new AppError("Role not found", 404);
+
+  const hierarchy = { org: 3, company: 2, unit: 1 };
+  if ((hierarchy[role.level] || 0) > (hierarchy[user.level] || 0)) {
+    throw new AppError(`You cannot assign ${role.level} level role`, 403);
+  }
+  if (role.level === "company") {
+    await assertPlanAllowsCompanyRoles(employee.org_id);
+    if (!employee.company_id) throw new AppError("A company is required for a company-level role", 400);
+  }
 
   // Check existing user
   const existingUser = await User.findOne({
     email:  employee.email,
     org_id: employee.org_id,
   });
-console.log("existingUser",existingUser)
   if (existingUser) {
+    // This branch reactivates an account without assigning the requested role.
+    // Do not reactivate a company-level account after its plan loses access.
+    if (existingUser.roleId && String(existingUser.roleId) !== String(role._id)) {
+      const existingRole = await Role.findById(existingUser.roleId).select("level").lean();
+      if (existingRole?.level === "company") {
+        await assertPlanAllowsCompanyRoles(employee.org_id);
+      }
+    }
     if (existingUser.isDeleted) {
       existingUser.isDeleted = false;
     }
@@ -664,7 +696,7 @@ console.log("existingUser",existingUser)
 
 // ─── CHANGE STATUS ────────────────────────────────────────────
 exports.changeStatus = async (id, payload, user) => {
-  const { status } = payload;
+  const { status, confirmCompanyAdminDeactivation } = payload;
 
   const validStatuses = ["ACTIVE", "INACTIVE", "TERMINATED", "ON_LEAVE", "ON_NOTICE"];
   if (!validStatuses.includes(status)) {
@@ -682,6 +714,14 @@ exports.changeStatus = async (id, payload, user) => {
   }
 
   if (employee.status === status) throw new AppError(`Employee is already ${status}`, 400)
+
+  if (employee.userId) {
+    const { mapEmployeeStatusToUser } = require('../../utils/statusSync');
+    const { assertCompanyAdminDeactivationConfirmed } = require('../../utils/companyAdminStatusGuard');
+    await assertCompanyAdminDeactivationConfirmed(
+      employee.userId, mapEmployeeStatusToUser(status), confirmCompanyAdminDeactivation
+    );
+  }
 
   employee.status    = status;
   employee.updatedBy = user.userId;
@@ -813,7 +853,7 @@ exports.downloadMyDocument = async (docId, user) => {
 
   const doc = await EmployeeDocument.findOne({
     _id:        docId,
-    employeeId: employee._id,   // 🔒 security: apna hi document milega
+    employeeId: employee._id,   // Security: only retrieve this employee's document
     isDeleted:  false,
   }).lean();
 
@@ -837,7 +877,7 @@ exports.getProfileCompletion = async (user) => {
 
   if (!employee) throw new AppError("Employee profile not found", 404);
 
-  // Har field check karo — filled hai ya nahi
+  // Check whether each field is filled in
   const checks = {
     basicInfo: {
       label:  "Basic Information",
@@ -880,7 +920,7 @@ exports.getProfileCompletion = async (user) => {
     },
   };
 
-  // Score calculate
+  // Calculate the score
   let totalFields   = 0;
   let filledFields  = 0;
   const sections    = [];

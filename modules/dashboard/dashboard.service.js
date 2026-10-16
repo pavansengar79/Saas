@@ -24,6 +24,7 @@ const Plan         = require("../plan/models/plan.model");
 const AuditLog     = require("../superAdmin/models/auditLog.models");
 const Role = require("../role/role.model");
 const CompanyConfig = require("../companyConfig/models/companyConfig.model");
+const { monthRange: orgMonthRange, summarizeAttendance } = require('../attendance/attendanceMetrics');
 
 // CRITICAL FIX: Import timezone utility for consistent date handling
 const { getTodayDateInOrgTimezone } = require("../../utils/timezone");
@@ -54,11 +55,9 @@ const todayRange = (timezone = 'Asia/Kolkata') => {
   return { start, end, dateString: todayDateString };
 };
 
-const monthRange = (monthStr) => {
-  const [year, mon] = monthStr.split("-").map(Number);
-  const start = new Date(Date.UTC(year, mon - 1, 1));
-  const end   = new Date(Date.UTC(year, mon, 1) - 1);
-  return { start, end };
+const monthRange = (monthStr, timezone) => {
+  const { start, end } = orgMonthRange(monthStr, timezone);
+  return { start, end: new Date(end.getTime() - 1) };
 };
 
 const currentMonthStr = (timezone = 'Asia/Kolkata') => {
@@ -379,7 +378,7 @@ exports.getUnitDashboard = async (user, query = {}) => {
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
   const month = query.month || currentMonthStr(timezone);
-  const { start: monthStart, end: monthEnd } = monthRange(month);
+  const { start: monthStart, end: monthEnd } = monthRange(month, timezone);
   
   const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
 
@@ -421,21 +420,11 @@ exports.getUnitDashboard = async (user, query = {}) => {
     Department.countDocuments({ org_id: orgId, company_id: companyId, unit_id: unitId, isDeleted: false }),
     Designation.countDocuments({ org_id: orgId, company_id: companyId, unit_id: unitId, isDeleted: false }),
 
-    Employee.countDocuments({ org_id: orgId, company_id: companyId, unit_id: unitId, isDeleted: false }),
+    Employee.countDocuments({ org_id: orgId, company_id: companyId, unit_id: unitId, status: 'ACTIVE', isDeleted: false }),
 
-    Attendance.aggregate([
-      { $match: {
-        org_id:     toObjId(orgId),
-        company_id: toObjId(companyId),
-        unit_id:    toObjId(unitId),
-        date:       { $gte: todayStart, $lte: todayEnd },
-      }},
-      { $group: {
-        _id: "$status",
-        count: { $sum: 1 },
-        wfh: { $sum: { $cond: [{ $eq: ["$isWFH", true] }, 1, 0] } },
-      } },
-    ]),
+    Attendance.find({ org_id: orgId, company_id: companyId, unit_id: unitId,
+      date: { $gte: todayStart, $lte: todayEnd }, isDeleted: false })
+      .select('employeeId status checkIn isLate isWFH').lean(),
 
     LeaveRequest.find({
       org_id:     orgId,
@@ -523,9 +512,9 @@ exports.getUnitDashboard = async (user, query = {}) => {
       }},
       { $group: {
         _id:                null,
-        present:            { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
+        present:            { $sum: { $cond: [{ $or: [{ $ne: ['$checkIn', null] }, { $in: ["$status", ["PRESENT", "WFH", "LATE", "HALF_DAY"]] }] }, 1, 0] } },
         absent:             { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
-        late:               { $sum: { $cond: [{ $eq: ["$status", "LATE"] }, 1, 0] } },
+        late:               { $sum: { $cond: [{ $or: [{ $eq: ['$isLate', true] }, { $eq: ["$status", "LATE"] }] }, 1, 0] } },
         onLeave:            { $sum: { $cond: [{ $eq: ["$status", "ON_LEAVE"] }, 1, 0] } },
         totalWorkingHours:  { $sum: { $ifNull: ["$workingHours", 0] } },
         totalOvertimeHours: { $sum: { $ifNull: ["$overtimeHours", 0] } },
@@ -563,12 +552,40 @@ exports.getUnitDashboard = async (user, query = {}) => {
     }))
   });
   
-  todayAtt.forEach((r) => { if (todayMap[r._id] !== undefined) todayMap[r._id] = r.count; });
-  const wfhCount = todayAtt.reduce((count, record) => count + (record._id === "WFH" ? record.count : record.wfh), 0);
-  const totalPresent = todayMap.PRESENT + todayMap.LATE + todayMap.WFH;
-  
-  // Calculate absent: total employees - those who are present/late/wfh/onLeave
-  const calculatedAbsent = Math.max(0, employeeCount - totalPresent - todayMap.ON_LEAVE);
+  const activeEmployees = await Employee.find({ org_id: orgId, company_id: companyId,
+    unit_id: unitId, status: 'ACTIVE', isDeleted: false }).select('_id joiningDate').lean();
+  const eligible = activeEmployees.filter(e => !e.joiningDate || moment(e.joiningDate).tz(timezone).format('YYYY-MM-DD') <= todayDateString);
+  const eligibleIds = new Set(eligible.map(e => String(e._id)));
+  const dailyRecords = todayAtt.filter(r => eligibleIds.has(String(r.employeeId)));
+  const counts = summarizeAttendance(dailyRecords);
+  const recordedIds = new Set(dailyRecords.map(r => String(r.employeeId)));
+  const [todayHoliday, approvedLeaves] = await Promise.all([
+    Holiday.findOne({ org_id: orgId, company_id: companyId,
+      $or: [{ unit_id: unitId }, { unit_id: null }], date: { $gte: todayStart, $lte: todayEnd },
+      isDeleted: false }).select('_id').lean(),
+    LeaveRequest.find({ org_id: orgId, company_id: companyId,
+      employeeId: { $in: eligible.map(e => e._id) }, status: 'APPROVED', isDeleted: false,
+      startDate: { $lte: todayEnd }, endDate: { $gte: todayStart } }).select('employeeId').lean(),
+  ]);
+  const leaveIds = new Set(approvedLeaves.map(l => String(l.employeeId)));
+  for (const record of dailyRecords) {
+    if (record.status === 'ABSENT' && !record.checkIn && leaveIds.has(String(record.employeeId))) {
+      counts.absent--;
+      counts.onLeave++;
+    }
+  }
+  const workingDay = moment.tz(timezone).isoWeekday() <= 5 && !todayHoliday;
+  for (const employee of eligible) {
+    const id = String(employee._id);
+    if (recordedIds.has(id) || !workingDay) continue;
+    if (leaveIds.has(id)) counts.onLeave++;
+    else counts.absent++;
+  }
+  const totalPresent = counts.present;
+  const calculatedAbsent = counts.absent;
+  const wfhCount = counts.wfh;
+  todayMap.LATE = counts.late;
+  todayMap.ON_LEAVE = counts.onLeave;
   
   console.log('[getUnitDashboard] Today calculation:', {
     employeeCount,
@@ -662,9 +679,10 @@ exports.getUnitDashboard = async (user, query = {}) => {
       present:        totalPresent,
       absent:         calculatedAbsent,  // Calculated based on total employees
       late:           todayMap.LATE,
+      halfDay:        counts.halfDay,
       onLeave:        todayMap.ON_LEAVE,
       wfh:            wfhCount,
-      attendanceRate: employeeCount > 0 ? Math.round((totalPresent / employeeCount) * 100) : 0,
+      attendanceRate: eligible.length > 0 ? Math.round((totalPresent / eligible.length) * 100) : 0,
     },
     monthlyAttendance: {
       present:            mAtt.present,
@@ -716,7 +734,7 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
   const month = query.month || currentMonthStr(timezone);
   const [yr, mon] = month.split("-").map(Number);
   const year = yr; // Use year from month parameter, not current year
-  const { start: monthStart, end: monthEnd } = monthRange(month);
+  const { start: monthStart, end: monthEnd } = monthRange(month, timezone);
   const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
 
   const employee = await Employee.findOne({
@@ -764,12 +782,12 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
       }},
       { $group: {
         _id:                null,
-        present:            { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
+        present:            { $sum: { $cond: [{ $or: [{ $ne: ['$checkIn', null] }, { $in: ["$status", ["PRESENT", "WFH", "LATE", "HALF_DAY"]] }] }, 1, 0] } },
         absent:             { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
-        late:               { $sum: { $cond: [{ $eq: ["$status", "LATE"] }, 1, 0] } },
+        late:               { $sum: { $cond: [{ $or: [{ $eq: ['$isLate', true] }, { $eq: ["$status", "LATE"] }] }, 1, 0] } },
         halfDay:            { $sum: { $cond: [{ $eq: ["$status", "HALF_DAY"] }, 1, 0] } },
         onLeave:            { $sum: { $cond: [{ $eq: ["$status", "ON_LEAVE"] }, 1, 0] } },
-        wfh:                { $sum: { $cond: [{ $eq: ["$status", "WFH"] }, 1, 0] } },
+        wfh:                { $sum: { $cond: [{ $or: [{ $eq: ['$isWFH', true] }, { $eq: ["$status", "WFH"] }] }, 1, 0] } },
         totalWorkingHours:  { $sum: { $ifNull: ["$workingHours", 0] } },
         totalOvertimeHours: { $sum: { $ifNull: ["$overtimeHours", 0] } },
         totalLateMinutes:   { $sum: { $ifNull: ["$lateMinutes", 0] } },
@@ -891,7 +909,7 @@ exports.getManagerDashboard = async (user, query = {}) => {
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
   const month = query.month || currentMonthStr(timezone);
-  const { start: monthStart, end: monthEnd } = monthRange(month);
+  const { start: monthStart, end: monthEnd } = monthRange(month, timezone);
   const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
 
   // 1. Get manager's employee record
@@ -913,7 +931,7 @@ exports.getManagerDashboard = async (user, query = {}) => {
     unit_id: unitId,
     isDeleted: false,
     status: "ACTIVE",
-  }).select("_id name employeeId status").lean();
+  }).select("_id name employeeId status joiningDate").lean();
 
   const teamIds = teamMembers.map(e => e._id);
 
@@ -924,7 +942,7 @@ exports.getManagerDashboard = async (user, query = {}) => {
     unit_id: unitId,
     employeeId: { $in: teamIds },
     date: { $gte: todayStart, $lte: todayEnd },
-  }).select("employeeId status checkIn checkOut").lean();
+  }).select("employeeId status checkIn checkOut isLate isWFH").lean();
 
   // 4. Pending leave requests from team
   const pendingLeaves = await LeaveRequest.find({
@@ -956,15 +974,41 @@ exports.getManagerDashboard = async (user, query = {}) => {
     {
       $group: {
         _id: null,
-        present: { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
+        present: { $sum: { $cond: [{ $or: [{ $ne: ['$checkIn', null] }, { $in: ["$status", ["PRESENT", "WFH", "LATE", "HALF_DAY"]] }] }, 1, 0] } },
         absent: { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
-        late: { $sum: { $cond: [{ $eq: ["$status", "LATE"] }, 1, 0] } },
+        late: { $sum: { $cond: [{ $or: [{ $eq: ['$isLate', true] }, { $eq: ["$status", "LATE"] }] }, 1, 0] } },
         onLeave: { $sum: { $cond: [{ $eq: ["$status", "ON_LEAVE"] }, 1, 0] } },
       },
     },
   ]);
 
   const attSummary = teamAttSummary[0] || { present: 0, absent: 0, late: 0, onLeave: 0 };
+  const eligibleTeam = teamMembers.filter(e => !e.joiningDate || moment(e.joiningDate).tz(timezone).format('YYYY-MM-DD') <= todayDateString);
+  const teamCounts = summarizeAttendance(teamAttendanceToday);
+  const seenTeam = new Set(teamAttendanceToday.map(a => String(a.employeeId)));
+  const [teamHoliday, teamLeaves] = await Promise.all([
+    Holiday.findOne({ org_id: orgId, company_id: companyId,
+      $or: [{ unit_id: unitId }, { unit_id: null }], date: { $gte: todayStart, $lte: todayEnd },
+      isDeleted: false }).select('_id').lean(),
+    LeaveRequest.find({ org_id: orgId, company_id: companyId, status: 'APPROVED', isDeleted: false,
+      employeeId: { $in: eligibleTeam.map(e => e._id) },
+      startDate: { $lte: todayEnd }, endDate: { $gte: todayStart } }).select('employeeId').lean(),
+  ]);
+  const teamLeaveIds = new Set(teamLeaves.map(l => String(l.employeeId)));
+  for (const record of teamAttendanceToday) {
+    if (record.status === 'ABSENT' && !record.checkIn && teamLeaveIds.has(String(record.employeeId))) {
+      teamCounts.absent--;
+      teamCounts.onLeave++;
+    }
+  }
+  if (moment.tz(timezone).isoWeekday() <= 5 && !teamHoliday) {
+    for (const employee of eligibleTeam) {
+      const id = String(employee._id);
+      if (seenTeam.has(id)) continue;
+      if (teamLeaveIds.has(id)) teamCounts.onLeave++;
+      else teamCounts.absent++;
+    }
+  }
 
   // 6. Recent leaves from team (all statuses)
   const recentLeaves = await LeaveRequest.find({
@@ -1009,10 +1053,12 @@ exports.getManagerDashboard = async (user, query = {}) => {
       members: teamMembers.slice(0, 10),
     },
     todayAttendance: {
-      present: teamAttendanceToday.filter(a => ["PRESENT", "LATE", "WFH"].includes(a.status)).length,
-      absent: teamAttendanceToday.filter(a => a.status === "ABSENT").length,
-      onLeave: teamAttendanceToday.filter(a => a.status === "ON_LEAVE").length,
-      late: teamAttendanceToday.filter(a => a.status === "LATE").length,
+      present: teamCounts.present,
+      absent: teamCounts.absent,
+      onLeave: teamCounts.onLeave,
+      late: teamCounts.late,
+      wfh: teamCounts.wfh,
+      halfDay: teamCounts.halfDay,
       records: teamAttendanceToday,
     },
     monthAttendance: attSummary,

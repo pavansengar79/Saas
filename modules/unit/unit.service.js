@@ -33,13 +33,13 @@ const verifyLobScope = async (lob_id, reqUser) => {
 
 // ─── CREATE ───────────────────────────────────────────────────
 // Flow:
-//   1. Unit create karo
-//   2. Unit Admin user create karo (is_first_login: true)
-//   3. Employee record create karo (for HRMS operations: attendance, leave, payroll)
-//   4. Credentials email bhejo
+//   1. Create the Unit
+//   2. Create the Unit Admin user (is_first_login: true)
+//   3. Create the Employee record (for HRMS operations: attendance, leave, payroll)
+//   4. Email the credentials
 // All in one DB transaction. Email is outside transaction.
 //
-// admin_email is separate from unit — Unit Admin ka email
+// admin_email is separate from the unit — it is the Unit Admin's email
 // (different from LOB/Company email)
 exports.createUnit = async (payload, reqUser) => {
   const {

@@ -1,15 +1,15 @@
 // modules/shift/roster.service.js
 //
-// Roster = employee ko shift assign karna for a date range
+// Roster = assign an employee to a shift for a date range
 //
 // Dynamic design:
-//   - Overlap check: ek employee ek hi waqt mein 2 active rosters nahi le sakta
-//   - Bulk assign: ek shift pe multiple employees ek saath assign kar sako
-//   - Calendar view: month-wise kaun kis shift pe hai
-//   - Revoke: endDate se pehle manually cancel kar sako
-//   - HR Manager create/revoke kar sakta hai, employee sirf dekh sakta hai
-//   - resolveShiftForEmployee → shift.service.js se already handle hota hai
-//     (attendance.service.js woh use karta hai, yeh nahi)
+//   - Overlap check: an employee cannot have two active rosters at the same time
+//   - Bulk assign: assign multiple employees to one shift at once
+//   - Calendar view: see employees' shifts by month
+//   - Revoke: manually cancel before endDate
+//   - HR Manager can create/revoke; employees can only view
+//   - resolveShiftForEmployee is already handled by shift.service.js
+//     (attendance.service.js uses that function, not this one)
 
 "use strict";
 
@@ -45,8 +45,8 @@ const buildScope = (user, unitOverride = null) => ({
 });
 
 // ─── Helper: overlap check for one employee ───────────────────
-// Ek employee ke liye check karo ki given date range mein
-// koi aur ACTIVE roster already exist karta hai ya nahi
+// Check whether another ACTIVE roster already exists for this employee
+// within the given date range
 const checkOverlap = async (employeeId, unitId, startDate, endDate, excludeId = null) => {
   const query = {
     employee_id: toObjId(employeeId),
@@ -154,7 +154,7 @@ exports.createRoster = async (payload, user) => {
 
 // ─── BULK ASSIGN ─────────────────────────────────────────────
 // POST /rosters/bulk
-// Ek shift pe multiple employees assign karo ek saath
+// Assign multiple employees to one shift at once
 // Body: { employee_ids: [], shift_id, startDate, endDate, notes, unit_id? }
 exports.bulkAssignRoster = async (payload, user) => {
   const {
@@ -254,7 +254,7 @@ exports.bulkAssignRoster = async (payload, user) => {
 
 // ─── GET EMPLOYEE ROSTERS ─────────────────────────────────────
 // GET /rosters?employee_id=&month=YYYY-MM&status=&unit_id=
-// Employee apna roster dekhe, HR sab dekhe
+// Employees can view their own rosters; HR can view all rosters
 exports.getEmployeeRosters = async (query, user) => {
   const {
     employee_id,
@@ -265,7 +265,7 @@ exports.getEmployeeRosters = async (query, user) => {
     limit = 20,
   } = query;
 
-  // Employee sirf apna dekh sakta hai
+  // Employees can view only their own rosters
   const targetEmployeeId = user.roleSlug === "employee"
     ? user.employeeId
     : employee_id;
@@ -325,7 +325,7 @@ exports.getEmployeeRosters = async (query, user) => {
 
 // ─── CALENDAR VIEW ────────────────────────────────────────────
 // GET /rosters/calendar?month=YYYY-MM&unit_id=&department_id=
-// HR + Manager: kaun kis shift pe hai is month — visual calendar ke liye
+// HR + Manager: see who is on which shift this month in a visual calendar
 exports.getRosterCalendar = async (query, user) => {
   const { month, unit_id, department_id } = query;
 
@@ -521,7 +521,7 @@ exports.updateRoster = async (id, payload, user) => {
 
 // ─── REVOKE ──────────────────────────────────────────────────
 // PATCH /rosters/:id/revoke
-// EndDate se pehle manually cancel karo
+// Manually cancel before endDate
 // Body: { reason? }
 exports.revokeRoster = async (id, payload, user) => {
   const roster = await Roster.findOne({

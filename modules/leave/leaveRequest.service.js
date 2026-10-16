@@ -279,7 +279,8 @@ exports.applyLeave = async (payload, user) => {
    {
     // Use dynamic balance calculation from active policy
     const { getActiveLeavePolicy, calculateLeaveUsage } = require("./leave.service");
-    const year = today.getFullYear();
+    const { earnedCredits, daysInYear } = require('./leaveAccounting');
+    const year = start.getUTCFullYear();
 
     const activePolicy = await getActiveLeavePolicy(
       employee.org_id,
@@ -304,15 +305,27 @@ exports.applyLeave = async (payload, user) => {
     }
 
     // Calculate usage dynamically
-    const allocated = policyLeaveType.credit?.totalPerYear || 0;
+    const allocated = earnedCredits(policyLeaveType.credit, year, start, employee.joiningDate);
     const usage = await calculateLeaveUsage(employee._id, leaveTypeId, year);
-    const remaining = Math.max(0, allocated - usage.used - usage.pending);
+    const remaining = allocated - usage.used - usage.pending +
+      (policyLeaveType.balance?.allowNegative ? policyLeaveType.balance.maxNegative || 0 : 0);
 
-    if (remaining < totalDays) {
+    if (remaining < daysInYear({ startDate: start, endDate: end, totalDays }, year)) {
       throw new AppError(
         `Insufficient leave balance. Available: ${remaining} day(s), Requested: ${totalDays} day(s)`,
         400
       );
+    }
+
+    if (end.getUTCFullYear() !== year) {
+      const nextYear = end.getUTCFullYear();
+      const nextUsage = await calculateLeaveUsage(employee._id, leaveTypeId, nextYear);
+      const nextAllocation = earnedCredits(policyLeaveType.credit, nextYear, end, employee.joiningDate);
+      const nextAvailable = nextAllocation - nextUsage.used - nextUsage.pending +
+        (policyLeaveType.balance?.allowNegative ? policyLeaveType.balance.maxNegative || 0 : 0);
+      if (nextAvailable < daysInYear({ startDate: start, endDate: end, totalDays }, nextYear)) {
+        throw new AppError(`Insufficient leave balance for ${nextYear}`, 400);
+      }
     }
 
     // Store balance snapshot for record-keeping

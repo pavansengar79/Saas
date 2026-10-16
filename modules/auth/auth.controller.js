@@ -75,7 +75,7 @@ const AppError = require("../../utils/appError");
       console.error('[AuthAudit] Failed to log LOGIN:', auditError.message);
     }
     
-    // ✅ MFA required hai toh alag response
+    // ✅ Return a separate response when MFA is required
     if (result.mfaRequired) {
       return res.status(200).json({
         success:     true,
@@ -128,7 +128,7 @@ exports.googleCallback = async (req, res, next) => {
   try {
     const googleUser = req.user;
 
-    // ✅ state se lo ya fallback
+    // ✅ Use the state parameter or fall back to the default URL
     const returnUrl = req.query.state 
       || `${process.env.GOOGLE_FRONTEND_REDIRECT_URI}/auth/google/callback`;
 
@@ -152,7 +152,7 @@ exports.googleCallback = async (req, res, next) => {
         isNewUser: "true"
       });
 
-      // ✅ /auth/google/callback path add karo
+      // ✅ Include the /auth/google/callback path
       return res.redirect(
         `${returnUrl}?${params.toString()}`
       );
@@ -217,7 +217,7 @@ exports.googleCallback = async (req, res, next) => {
       daysLeft:             daysLeft > 0 ? daysLeft : 0
     });
 
-    // ✅ /auth/google/callback path add karo
+    // ✅ Include the /auth/google/callback path
     return res.redirect(
       `${returnUrl}?${params.toString()}`
     );
@@ -250,7 +250,7 @@ exports.getMe = async (req, res, next) => {
 //     const googleUser = req.user;
 //     // console.log("Google user data:", googleUser);
 
-//     // Naya user — company details chahiye
+//     // New user — company details are required
 //     if (googleUser.isNewUser) {
 //       const tempToken = jwt.sign(
 //         {
@@ -263,7 +263,7 @@ exports.getMe = async (req, res, next) => {
 //         { expiresIn: "1h" }
 //       );
 
-//       // Frontend onboarding page pe redirect
+//       // Redirect to the frontend onboarding page
 //       return res.redirect(
 //         `${process.env.FRONTEND_URL}/onboarding?token=${tempToken}`
 //       );
@@ -283,7 +283,7 @@ exports.getMe = async (req, res, next) => {
 //       process.env.JWT_SECRET,
 //       { expiresIn: "1d" }
 //     );
-//     // Frontend dashboard pe redirect
+//     // Redirect to the frontend dashboard
 //     return res.redirect(
 //       `${process.env.GOOGLE_FRONTEND_REDIRECT_URI}/auth/google/callback?token=${token}`
 //     );
@@ -297,7 +297,7 @@ exports.getMe = async (req, res, next) => {
 //   try {
 //     const googleUser = req.user;
 
-//     // Naya user — company details chahiye
+//     // New user — company details are required
 //     if (googleUser.isNewUser) {
 //       const tempToken = jwt.sign(
 //         {
@@ -310,12 +310,12 @@ exports.getMe = async (req, res, next) => {
 //         { expiresIn: "1h" }
 //       );
 
-//       // ✅ Frontend nahi hai — JSON return karo
+//       // ✅ No frontend available — return JSON
 //       return res.status(200).json({
 //         success:  true,
 //         message:  "New user — complete registration",
 //         isNewUser: true,
-//         tempToken  // frontend pe bhejoge baad mein
+//         tempToken  // Send to the frontend later
 //       });
 //     }
 
@@ -334,7 +334,7 @@ exports.getMe = async (req, res, next) => {
 //       { expiresIn: "1d" }
 //     );
 
-//     // ✅ Frontend nahi hai — JSON return karo
+//     // ✅ No frontend available — return JSON
 //     return res.status(200).json({
 //       success: true,
 //       message: "Login successful",
@@ -373,7 +373,7 @@ exports.completeRegistration = async (req, res, next) => {
     const token = req.headers.authorization?.split(" ")[1];
     if (!token) throw new AppError("Token required", 401);
 
-    // Temp token verify karo
+    // Verify the temporary token
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -381,7 +381,7 @@ exports.completeRegistration = async (req, res, next) => {
       throw new AppError("Invalid or expired token", 401);
     }
 
-    // isNewUser check — real token se access na ho
+    // Check isNewUser to prevent access with a regular token
     if (!decoded.isNewUser) {
       throw new AppError("Invalid token", 401);
     }

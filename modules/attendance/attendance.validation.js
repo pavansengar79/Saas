@@ -8,14 +8,14 @@ const objectId = Joi.string()
   .messages({ "string.pattern.base": "Invalid ID format" });
 
 // ─── GET /me/attendance?month=YYYY-MM ────────────────────────
-// Employee apni attendance fetch karta hai
+// Employee fetches their attendance
 exports.getMyAttendance = Joi.object({
   month: Joi.string()
     .pattern(/^\d{4}-(0[1-9]|1[0-2])$/)
     .required()
     .messages({
-      "any.required":         "month query param required hai (e.g. 2026-04)",
-      "string.pattern.base":  "month format YYYY-MM hona chahiye (e.g. 2026-04)",
+      "any.required":         "The month query parameter is required (e.g., 2026-04).",
+      "string.pattern.base":  "Month must be in YYYY-MM format (e.g., 2026-04).",
     }),
   orgId: objectId.optional(),
   companyId: objectId.optional(),
@@ -23,7 +23,7 @@ exports.getMyAttendance = Joi.object({
 });
 
 // ─── POST /punch-in ───────────────────────────────────────────
-// Employee punch-in karta hai
+// Employee punches in
 exports.punchIn = Joi.object({
   isWFH: Joi.boolean().default(false),
 
@@ -42,7 +42,7 @@ exports.punchIn = Joi.object({
 });
 
 // ─── POST /punch-out ──────────────────────────────────────────
-// Employee punch-out karta hai
+// Employee punches out
 exports.punchOut = Joi.object({
   remarks: Joi.string()
     .trim()
@@ -68,7 +68,7 @@ exports.getAttendance = Joi.object({
     .pattern(/^\d{4}-(0[1-9]|1[0-2])$/)
     .optional()
     .messages({
-      "string.pattern.base": "month format YYYY-MM hona chahiye",
+      "string.pattern.base": "Month must be in YYYY-MM format.",
     }),
   
   // Date range support (new)
@@ -76,7 +76,7 @@ exports.getAttendance = Joi.object({
     .iso()
     .optional()
     .messages({
-      "date.format": "startDate ISO format mein hona chahiye (YYYY-MM-DD)",
+      "date.format": "startDate must be in ISO format (YYYY-MM-DD).",
     }),
   
   endDate: Joi.date()
@@ -84,8 +84,8 @@ exports.getAttendance = Joi.object({
     .min(Joi.ref("startDate"))
     .optional()
     .messages({
-      "date.format": "endDate ISO format mein hona chahiye (YYYY-MM-DD)",
-      "date.min": "endDate, startDate se pehle nahi ho sakti",
+      "date.format": "endDate must be in ISO format (YYYY-MM-DD).",
+      "date.min": "endDate cannot be earlier than startDate.",
     }),
 
   employeeId: objectId.optional(),
@@ -107,7 +107,7 @@ exports.getAttendance = Joi.object({
 });
 
 // ─── PATCH /attendance/:id/regularize (HR only) ───────────────
-// HR manually kisi record ko fix karta hai
+// HR manually corrects an attendance record
 exports.regularize = Joi.object({
   regularizationType: Joi.string()
     .valid(
@@ -160,8 +160,8 @@ exports.getSummary = Joi.object({
     .pattern(/^\d{4}-(0[1-9]|1[0-2])$/)
     .required()
     .messages({
-      "any.required":        "month required hai",
-      "string.pattern.base": "month format YYYY-MM hona chahiye",
+      "any.required":        "Month is required.",
+      "string.pattern.base": "Month must be in YYYY-MM format.",
     }),
 
   orgId: objectId.optional(),

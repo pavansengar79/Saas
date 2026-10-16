@@ -137,7 +137,7 @@ exports.updateLeaveTypes = async (id, leaveTypes, user) => {
   if (!policy) throw new AppError("Leave policy not found", 404);
   if (policy.status === "archived") throw new AppError("Cannot update an archived policy", 400);
 
-  // leaveTypeId se master data fetch karo
+  // Fetch master data using leaveTypeId
   const linkedIds = [...new Set(
     leaveTypes.filter((leaveType) => leaveType.leaveTypeId).map((leaveType) => leaveType.leaveTypeId.toString())
   )];

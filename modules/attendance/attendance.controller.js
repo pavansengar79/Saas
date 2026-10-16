@@ -4,7 +4,7 @@ const attendanceService = require("./attendance.service");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /hrms/me/attendance/punch-in
-// Employee punch-in karta hai
+// Employee punches in
 // ─────────────────────────────────────────────────────────────────────────────
 exports.punchIn = async (req, res, next) => {
   try {
@@ -23,7 +23,7 @@ exports.punchIn = async (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /hrms/me/attendance/punch-out
-// Employee punch-out karta hai
+// Employee punches out
 // ─────────────────────────────────────────────────────────────────────────────
 exports.punchOut = async (req, res, next) => {
   try {
@@ -77,7 +77,7 @@ exports.adminPunchOut = async (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /hrms/me/attendance?month=YYYY-MM
-// Employee apna monthly attendance detail dekhta hai
+// Employee views their monthly attendance details
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getMyAttendance = async (req, res, next) => {
   try {
@@ -95,7 +95,7 @@ exports.getMyAttendance = async (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /hrms/me/attendance/today
-// Employee aaj ka punch-in/out status dekhta hai
+// Employee views today's punch-in/out status
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getTodayStatus = async (req, res, next) => {
   try {
@@ -113,7 +113,7 @@ exports.getTodayStatus = async (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /hrms/me/attendance/summary?month=YYYY-MM
-// Employee ka monthly summary (present, absent, late count etc.)
+// Employee's monthly summary (present, absent, late count etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getMySummary = async (req, res, next) => {
   try {
@@ -155,7 +155,7 @@ exports.getTeamAttendance = async (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /hrms/attendance?month=&employeeId=&status=  (HR only)
-// HR sab employees ki attendance dekhta hai
+// HR views attendance for all employees
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getAllAttendance = async (req, res, next) => {
   try {
@@ -215,7 +215,7 @@ exports.adminPunchOut = async (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PATCH /hrms/attendance/:id/regularize  (HR only)
-// HR manually kisi attendance record ko fix karta hai
+// HR manually corrects an attendance record
 // ─────────────────────────────────────────────────────────────────────────────
 exports.regularize = async (req, res, next) => {
   try {

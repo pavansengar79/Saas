@@ -279,10 +279,10 @@ exports.getMyPlan = async (user) => {
 // GET MY FEATURES
 // GET /plans/my-features
 //
-// Current user ke active subscription ka features[] return karo
-// Frontend yahi use kare:
-//   - Kaunsa button/screen lock dikhana hai
-//   - Upgrade prompt kab dikhana hai
+// Return features[] from the current user's active subscription
+// The frontend should use this to decide:
+//   - Which buttons/screens to show as locked
+//   - When to show an upgrade prompt
 //
 // Response:
 // {
@@ -291,14 +291,14 @@ exports.getMyPlan = async (user) => {
 //   featureMap: { shift_roster: true, saml_sso: false, ... }
 // }
 //
-// featureMap mein sab known features hain — true/false
-// Frontend ek baar yeh call kare, cache kare locally
+// featureMap contains all known features with true/false values
+// The frontend should call this once and cache it locally
 // ─────────────────────────────────────────────────────────────
 
 // exports.getMyFeatures = async (user) => {
-//   // ── Step 1: Sab active plans ke features ka union lo (fully dynamic) ──
-//   // Koi naya feature kisi plan mein add ho → yahan automatically aayega
-//   // No hardcoded list — DB se resolve hota hai
+//   // ── Step 1: Collect the union of features from all active plans (fully dynamic) ──
+//   // A new feature added to any plan will appear here automatically
+//   // No hardcoded list — resolved from the database
 //   const allPlans = await Plan.find({
 //     status:     "Active",
 //     is_deleted: false,
@@ -308,7 +308,7 @@ exports.getMyPlan = async (user) => {
 //     ...new Set(allPlans.flatMap((p) => p.features || [])),
 //   ];
 
-//   // ── Step 2: SUPER_ADMIN — sab features milenge ───────────────
+//   // ── Step 2: SUPER_ADMIN — receives all features ───────────────
 //   if (user.role === "SUPER_ADMIN" || user.roleSlug === "super_admin") {
 //     const featureMap = {};
 //     ALL_FEATURE_KEYS.forEach((k) => { featureMap[k] = true; });
@@ -331,10 +331,10 @@ exports.getMyPlan = async (user) => {
 //   const planName    = subscription?.plan_snapshot?.name        || "Trial";
 //   const packageType = subscription?.plan_snapshot?.package_type || "professionals";
 
-//   // ── Step 4: featureMap build karo ────────────────────────────
-//   // Sab known keys (from DB) → true if user ke plan mein hai
-//   // Agar Super Admin naya feature add kare kisi plan mein →
-//   // yeh map mein automatically aayega, code change nahi chahiye
+//   // ── Step 4: Build featureMap ──────────────────────────────────
+//   // All known keys (from DB) → true if included in the user's plan
+//   // If Super Admin adds a new feature to any plan →
+//   // it appears in this map automatically, with no code change needed
 //   const featureMap = {};
 //   ALL_FEATURE_KEYS.forEach((key) => {
 //     featureMap[key] = features.includes(key);
@@ -355,9 +355,9 @@ exports.getMyPlan = async (user) => {
 
 
 exports.getMyFeatures = async (user) => {
-  // ── Step 1: Sab active plans ke features ka union lo (fully dynamic) ──
-  // Koi naya feature kisi plan mein add ho → yahan automatically aayega
-  // No hardcoded list — DB se resolve hota hai
+  // ── Step 1: Collect the union of features from all active plans (fully dynamic) ──
+  // A new feature added to any plan will appear here automatically
+  // No hardcoded list — resolved from the database
   const allPlans = await Plan.find({
     status:     "Active",
     is_deleted: false,
@@ -375,7 +375,7 @@ exports.getMyFeatures = async (user) => {
     ...new Set(allPlans.flatMap((p) => p.moduleSlugs || [])),
   ];
 
-  // ── Step 2: SUPER_ADMIN — sab features milenge ───────────────
+  // ── Step 2: SUPER_ADMIN — receives all features ───────────────
   if (user.role === "SUPER_ADMIN" || user.roleSlug === "super_admin") {
     const featureMap = {};
     ALL_FEATURE_KEYS.forEach((k) => { featureMap[k] = true; });
@@ -405,10 +405,10 @@ exports.getMyFeatures = async (user) => {
   const planName    = subscription?.plan_snapshot?.name        || "Trial";
   const packageType = subscription?.plan_snapshot?.package_type || "professionals";
 
-  // ── Step 4: featureMap / moduleMap build karo ─────────────────
-  // Sab known keys (from DB) → true if user ke plan mein hai
-  // Agar Super Admin naya feature/module add kare kisi plan mein →
-  // yeh maps mein automatically aayega, code change nahi chahiye
+  // ── Step 4: Build featureMap / moduleMap ───────────────────────
+  // All known keys (from DB) → true if included in the user's plan
+  // If Super Admin adds a new feature/module to any plan →
+  // it appears in these maps automatically, with no code change needed
   const featureMap = {};
   ALL_FEATURE_KEYS.forEach((key) => {
     featureMap[key] = features.includes(key);

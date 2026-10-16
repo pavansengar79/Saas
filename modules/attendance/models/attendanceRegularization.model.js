@@ -96,7 +96,7 @@ approvalFlow: {
   default: "L2_ONLY",
 },
 
-// AT-14 fields (agar already nahi daale)
+// AT-14 fields (if not already added)
 raisedOnBehalf: { type: Boolean, default: false },
 raisedBy:       { type: Schema.Types.ObjectId, ref: "User", default: null },
 

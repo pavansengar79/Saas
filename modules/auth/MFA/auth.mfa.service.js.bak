@@ -7,7 +7,7 @@ const jwt       = require("../../../utils/jwt.utils");
 const AppError  = require("../../../utils/appError");
 const { encrypt, decrypt } = require("../../../utils/crypto");
 
-// App name — QR code mein dikhega (Google Authenticator mein "BenoSupport HRMS")
+// App name — shown in the QR code ("BenoSupport HRMS" in Google Authenticator)
 const APP_NAME = process.env.APP_NAME || "BenoSupport HRMS";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,16 +15,16 @@ const APP_NAME = process.env.APP_NAME || "BenoSupport HRMS";
 // POST /api/v1/auth/mfa/enrol
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Kya hota hai:
-//   1. Naya TOTP secret generate karo (speakeasy)
-//   2. otpauth:// URI banao — Google Authenticator isi ko scan karta hai
-//   3. QR code image banao (base64 PNG)
-//   4. Secret ko TEMP mein store karo user ke paas
-//      (DB mein permanent tab save hoga jab verify ho jaye)
+// What happens:
+//   1. Generate a new TOTP secret (speakeasy)
+//   2. Create an otpauth:// URI — Google Authenticator scans this
+//   3. Create a QR code image (base64 PNG)
+//   4. Store the secret temporarily for the user
+//      (it is saved permanently in the DB only after verification)
 //
-// Kyun temp mein store?
-//   Agar user QR scan kare bina chala jaye toh secret permanently nahi ban-ta.
-//   Sirf verify ke baad real mfaSecret set hoti hai.
+// Why store it temporarily?
+//   If the user leaves without scanning the QR code, the secret is not saved permanently.
+//   The actual mfaSecret is set only after verification.
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.enrol = async (userId) => {
@@ -33,7 +33,7 @@ exports.enrol = async (userId) => {
 
   if (!user) throw new AppError("User not found", 404);
 
-  // Already enabled hai toh block karo
+  // Block if already enabled
   if (user.mfaEnabled) {
     throw new AppError(
       "MFA is already enabled. Disable it first to re-enrol.",
@@ -41,23 +41,23 @@ exports.enrol = async (userId) => {
     );
   }
 
-  // Step 1: Secret generate karo
+  // Step 1: Generate the secret
   const secret = speakeasy.generateSecret({
-    name:   `${APP_NAME} (${user.email})`,  // QR mein label
+    name:   `${APP_NAME} (${user.email})`,  // Label in the QR code
     length: 20,                              // 20 bytes = strong enough
   });
 
-  // Step 2: Temp mein save karo — verify hone tak (ENCRYPTED!)
+  // Step 2: Save temporarily until verification (ENCRYPTED!)
   user.mfaTempSecret = encrypt(secret.base32);
   await user.save({ validateBeforeSave: false });
 
-  // Step 3: QR code banao — otpauth URI se
+  // Step 3: Create a QR code from the otpauth URI
   const qrCodeDataURL = await qrcode.toDataURL(secret.otpauth_url);
 
   return {
-    secret:      secret.base32,       // Manual entry ke liye (agar QR scan na ho sake)
-    otpauthUrl:  secret.otpauth_url,  // Advanced users ke liye
-    qrCode:      qrCodeDataURL,       // Frontend mein <img src={qrCode} /> karo
+    secret:      secret.base32,       // For manual entry (if the QR code cannot be scanned)
+    otpauthUrl:  secret.otpauth_url,  // For advanced users
+    qrCode:      qrCodeDataURL,       // Use <img src={qrCode} /> in the frontend
   };
 
 };
@@ -67,11 +67,11 @@ exports.enrol = async (userId) => {
 // POST /api/v1/auth/mfa/verify-enrolment
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// User ne QR scan kiya, app se 6-digit OTP aaya — verify karo
-// Sahi hone pe:
+// The user scanned the QR code and received a 6-digit OTP from the app — verify it
+// If valid:
 //   - mfaTempSecret → mfaSecret (permanent)
 //   - mfaEnabled: true
-//   - 8 backup codes generate karo (hashed store, plain text return)
+//   - Generate 8 backup codes (store hashes, return plaintext)
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.verifyEnrolment = async (userId, token) => {
@@ -96,12 +96,12 @@ exports.verifyEnrolment = async (userId, token) => {
   // Decrypt temp secret
   const tempSecret = decrypt(user.mfaTempSecret);
 
-  // Token verify karo against temp secret
+  // Verify the token against the temporary secret
   const isValid = speakeasy.totp.verify({
     secret:   tempSecret,
     encoding: "base32",
     token:    token,
-    window:   1,  // ±1 time window (30s drift allow) — prevents clock skew issues
+    window:   1,  // ±1 time window (allows 30s drift) — prevents clock skew issues
   });
 
   if (!isValid) {
@@ -113,11 +113,11 @@ await Promise.all(plainBackupCodes.map(async c => ({
   })));
 
   user.mfaSecret      = encrypt(tempSecret);   // encrypt permanent secret
-  user.mfaTempSecret  = null;                  // temp clear karo
+  user.mfaTempSecret  = null;                  // Clear the temporary secret
   user.mfaEnabled     = true;
   user.mfaEnrolledAt  = new Date()
   user.mfaSecret      = user.mfaTempSecret;   // temp → permanent
-  user.mfaTempSecret  = null;                  // temp clear karo
+  user.mfaTempSecret  = null;                  // Clear the temporary secret
   user.mfaEnabled     = true;
   user.mfaBackupCodes = hashedBackupCodes;
 
@@ -125,7 +125,7 @@ await Promise.all(plainBackupCodes.map(async c => ({
 
   return {
     message:     "MFA enabled successfully",
-    backupCodes: plainBackupCodes,  // Sirf ek baar dikhao — user save kare
+    backupCodes: plainBackupCodes,  // Show only once — the user should save them
   };
 
 };
@@ -135,10 +135,10 @@ await Promise.all(plainBackupCodes.map(async c => ({
 // POST /api/v1/auth/mfa/challenge
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Login ke baad jab mfaRequired: true aata hai
-// Frontend OTP maangta hai, yahan verify hota hai → full JWT milta hai
+// After login, when mfaRequired: true is returned
+// The frontend requests an OTP; it is verified here → a full JWT is issued
 //
-// Backup code bhi accept karta hai (agar phone nahi hai)
+// Also accepts a backup code (if the phone is unavailable)
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.verifyLoginChallenge = async (userId, token) => {
@@ -156,7 +156,7 @@ exports.verifyLoginChallenge = async (userId, token) => {
   // Decrypt secret for verification
   const secret = decrypt(user.mfaSecret);
 
-  // Pehle TOTP check karo
+  // Check TOTP first
   const isTotpValid = speakeasy.totp.verify({
     secret:   secret,
     encoding: "base32",
@@ -166,13 +166,13 @@ exports.verifyLoginChallenge = async (userId, token) => {
 
   if (isTotpValid) return { verified: true, method: "totp" };
 
-  // TOTP fail — backup code check karo
+  // If TOTP fails, check the backup code
   const validBackupCode = user.mfaBackupCodes.find(async bc => 
     !bc.used && await bcrypt.compare(token, bc.codeHash)
   );
 
   if (validBackupCode) {
-    // Backup code use hone ke baad mark as used — one-time use
+    // Mark the backup code as used after use — one-time use
     validBackupCode.used = true;
     validBackupCode.usedAt = new Date();
     await user.save({ validateBeforeSave: false });
@@ -195,14 +195,14 @@ exports.verifyLoginChallenge = async (userId, token) => {
 // POST /api/v1/auth/mfa/disable
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Password confirm + current OTP required — security ke liye dono chahiye
+// Password confirmation and the current OTP are both required for security
 // ─────────────────────────────────────────────────────────────────────────────
 
 exports.disable = async (userId, token) => {
 Decrypt secret
   const secret = decrypt(user.mfaSecret);
 
-  // Current OTP verify karo
+  // Verify the current OTP
   const isValid = speakeasy.totp.verify({
     secret:   skupCodes +password"
   );
@@ -213,7 +213,7 @@ Decrypt secret
     throw new AppError("MFA is not enabled", 400);
   }
 
-  // Current OTP verify karo
+  // Verify the current OTP
   const isValid = speakeasy.totp.verify({
     secret:   user.mfaSecret,
     encoding: "base32",
@@ -228,7 +228,7 @@ Decrypt secret
     );
   }
 
-  // Disable karo — sab clear
+  // Disable MFA — clear everything
   user.mfaEnabled     = false;
   user.mfaSecret      = null;
   user.mfaTempSecret  = null;
@@ -245,12 +245,12 @@ Decrypt secret
 // POST /api/v1/auth/mfa/backup-codes/regenerate
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Purane backup codes expire ho gaye ya sab use ho gaye
-// Current OTP verify karke naye codes generate karo
+// Old backup codes have expired or have all been used
+// Verify the current OTP and generate new codes
 // ──Decrypt secret
   const secret = decrypt(user.mfaSecret);
 
-  // Current OTP se confirm karo
+  // Confirm with the current OTP
   const isValid = speakeasy.totp.verify({
     secret:   secret,
     encoding: "base32",
@@ -269,7 +269,7 @@ Decrypt secret
   })));
   
   user.mfaBackupCodes     = hashedBackupCodes
-  // Current OTP se confirm karo
+  // Confirm with the current OTP
   const isValid = speakeasy.totp.verify({
     secret:   user.mfaSecret,
     encoding: "base32",
@@ -322,7 +322,7 @@ exports.getStatus = async (userId) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * 8 backup codes generate karo
+ * Generate 8 backup codes
  * Format: XXXX-XXXX (easy to read and type)
  */
 const generateBackupCodes = (count = 8) => {
@@ -334,7 +334,7 @@ const generateBackupCodes = (count = 8) => {
 };
 
 /**
- * Backup code ko SHA-256 hash karo — DB mein plain text nahi store karte
+ * Hash the backup code with SHA-256 — do not store plaintext in the DB
  */
 const hashBackupCode = (code) => {
   return crypto

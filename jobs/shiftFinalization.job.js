@@ -72,11 +72,12 @@ exports.runShiftFinalization = async (bufferMinutes = 120) => {
         for (const shift of shifts) {
           // Parse shift end time
           const [endH, endM] = shift.endTime.split(':').map(Number);
-          const shiftEndTime = moment(nowInOrg).set({ hour: endH, minute: endM, second: 0, millisecond: 0 });
+          const shiftEndTime = nowInOrg.clone().set({ hour: endH, minute: endM, second: 0, millisecond: 0 });
           
           // Handle night shift (isNextDay)
           if (shift.isNextDay) {
-            shiftEndTime.add(1, 'day');
+            // The shift ending today started yesterday.
+            // The attendance key therefore belongs to yesterday.
           }
           
           // Check if shift ended bufferMinutes ago
@@ -102,7 +103,8 @@ exports.runShiftFinalization = async (bufferMinutes = 120) => {
             
             if (shift.isNextDay) {
               // For night shifts, look at yesterday's date
-              targetDate.setDate(targetDate.getDate() - 1);
+              const previousDay = moment(targetDate).tz(timezone).subtract(1, 'day').startOf('day').toDate();
+              targetDate.setTime(previousDay.getTime());
             }
             
             const attendanceRecords = await Attendance.find({
@@ -170,20 +172,10 @@ async function finalizeAttendanceRecord(record, shift, config, timezone, now) {
   try {
     // Case 1: Already punched out → finalize working hours and OT
     if (record.checkOut) {
-      const workingHours = calculateWorkingHours(record.checkIn, record.checkOut, timezone);
-      let overtimeHours = 0;
-      
-      // Calculate OT if enabled
-      if (config.overtimeEnabled !== false) {
-        overtimeHours = calculateOvertime(
-          record.checkOut,
-          shift.endTime,
-          shift.isNextDay,
-          record.date,
-          timezone,
-          config.overtimeThresholdHours || shift.workingMinutes / 60
-        );
-      }
+      // Checkout is the authority for worked intervals and policy-capped OT.
+      // Recomputing first-to-last would incorrectly include breaks between sessions.
+      const workingHours = record.workingHours ?? calculateWorkingHours(record.checkIn, record.checkOut, timezone);
+      const overtimeHours = record.overtimeHours || 0;
       
       await Attendance.findByIdAndUpdate(record._id, {
         workingHours,

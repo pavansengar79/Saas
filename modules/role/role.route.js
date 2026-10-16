@@ -27,7 +27,7 @@ const requireAdmin = (req, res, next) => {
 // ── All role routes require authentication + admin check ────────
 router.use(authenticate, requireAdmin);
 
-// ── Specific routes PEHLE — /:id se pehle hone chahiye ──────
+// ── Register specific routes before /:id ────────────────────
 router.get(
   "/assignable-permissions",
   checkPermission("role.read"),

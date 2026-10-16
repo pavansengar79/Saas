@@ -19,7 +19,7 @@ const organizationRoutes = require("./modules/organisation/organization.route");
 const lobRoutes         = require("./modules/lob/lob.route");
 const unitRoutes        = require("./modules/unit/unit.route");
 const holidayRoutes     = require("./modules/holiday/holiday.route");
-// Yeh add karo route.js mein:
+// Add these routes in route.js:
 const attendanceRoutes       = require("./modules/attendance/attendance.routes");
 const regularizationRoutes   = require("./modules/attendance/attendanceregularization.routes");
 const auditLogRoutes         = require("./modules/auditLogs/auditLog.routes");

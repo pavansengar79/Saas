@@ -12,8 +12,26 @@ const AppError      = require("../../utils/appError");
 const { sendEmail } = require("../../utils/email/email");
 const { credentialsTemplate } = require("../../utils/email/templates/credentials");
 const { seedLeaveTypes } = require("../../seeders/leave.Seeders");
+const { normalizeCompanyName, legacyNamePattern } = require("./companyName");
 
 // ─── Helpers ──────────────────────────────────────────────────
+const companyNameConflict = (name, orgId, excludeId) => Company.findOne({
+  org_id: orgId,
+  is_deleted: false,
+  ...(excludeId && { _id: { $ne: excludeId } }),
+  $or: [
+    { company_name_key: normalizeCompanyName(name) },
+    { company_name: { $regex: legacyNamePattern(name), $options: "i" } },
+  ],
+});
+
+const duplicateCompanyError = (err) => {
+  if (err.code !== 11000) return err;
+  if (err.keyPattern?.company_name_key) return new AppError("A company with this name already exists", 409);
+  const field = Object.keys(err.keyPattern || {})[0] || "field";
+  return new AppError(`Duplicate value for ${field}. Please try again.`, 409);
+};
+
 const generateCompanyCode = (name) => {
   const prefix = name.replace(/\s+/g, "").substring(0, 4).toUpperCase();
   const suffix = Math.floor(1000 + Math.random() * 9000);
@@ -34,6 +52,10 @@ exports.createCompany = async (payload, reqUser) => {
     lobs = [],   // array of LOB names e.g. ["Technology", "Operations"]
     ...rest
   } = payload;
+
+  if (typeof company_name !== "string" || !normalizeCompanyName(company_name)) {
+    throw new AppError("Company name is required", 400);
+  }
  
   // Duplicate company email check
   const existing = await Company.findOne({
@@ -43,11 +65,7 @@ exports.createCompany = async (payload, reqUser) => {
   });
   if (existing) throw new AppError("A company with this email already exists", 409);
 
-  const existingName = await Company.findOne({
-    org_id: reqUser.orgId,
-    company_name: company_name.trim(),
-    is_deleted: false,
-  }).collation({ locale: "en", strength: 2 });
+  const existingName = await companyNameConflict(company_name, reqUser.orgId);
   if (existingName) throw new AppError("A company with this name already exists", 409);
  
   // Auto-generate unique company_code
@@ -68,13 +86,17 @@ exports.createCompany = async (payload, reqUser) => {
   try {
     // STEP 1 — Create Company
     [company] = await Company.create([{
+      ...rest,
       org_id:        reqUser.orgId,
       company_code,
       company_name,
       company_email: company_email.toLowerCase(),
       company_phone,
       created_by:    reqUser.userId,
-      ...rest,
+      is_deleted:    false,
+      // An admin is assigned only through the separate user invitation flow.
+      admin:         null,
+      company_name_key: normalizeCompanyName(company_name),
     }], { session });
  
     // STEP 2 — Inherit active OrgModules → CompanyModule
@@ -119,17 +141,14 @@ exports.createCompany = async (payload, reqUser) => {
     return {
       company,
       lobsCreated: lobs.length,
-      message: "Company created successfully.",
+      adminInvited: false,
+      message: "Company created successfully. No admin has been invited.",
     };
  
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
-    if (err.code === 11000) {
-      const field = Object.keys(err.keyPattern || {})[0] || "field";
-      throw new AppError(`Duplicate value for ${field}. Please try again.`, 409);
-    }
-    throw err;
+    throw duplicateCompanyError(err);
   }
 };
 
@@ -172,7 +191,7 @@ return {
 exports.getCompanyById = async (companyId, reqUser) => {
   const filter = { _id: companyId, org_id: reqUser.orgId, is_deleted: false };
 
-  // Company Admin/HR sirf apni company dekh sakta hai
+  // Company Admin/HR can only view their own company
   if (["company_admin", "company_hr_manager"].includes(reqUser.role)) {
     filter._id = reqUser.companyId;
   }
@@ -185,8 +204,32 @@ exports.getCompanyById = async (companyId, reqUser) => {
 // ─── UPDATE ───────────────────────────────────────────────────
 exports.updateCompany = async (companyId, payload, reqUser) => {
   // Protected fields — cannot be changed after creation
-  const restricted = ["org_id", "company_code", "company_email", "is_deleted"];
+  const restricted = ["org_id", "company_code", "company_email", "company_name_key", "is_deleted"];
   restricted.forEach(f => delete payload[f]);
+
+  const filter = { _id: companyId, org_id: reqUser.orgId, is_deleted: false };
+  if (payload.company_name !== undefined) {
+    if (typeof payload.company_name !== "string" || !normalizeCompanyName(payload.company_name)) {
+      throw new AppError("Company name is required", 400);
+    }
+    const current = await Company.findOne(filter).select("company_name +company_name_key").lean();
+    if (!current) throw new AppError("Company not found", 404);
+    const nameKey = normalizeCompanyName(payload.company_name);
+    if (nameKey !== normalizeCompanyName(current.company_name)) {
+      if (await companyNameConflict(payload.company_name, reqUser.orgId, companyId)) {
+        throw new AppError("A company with this name already exists", 409);
+      }
+      payload.company_name_key = nameKey;
+    } else if (current.company_name_key == null) {
+      // Legacy duplicate: allow profile edits without trying to claim a key
+      // already held by its sibling. Prevent a concurrent rename from making
+      // the name and its key disagree.
+      filter.company_name = current.company_name;
+      filter.company_name_key = null;
+    } else {
+      payload.company_name_key = nameKey;
+    }
+  }
 
   // T-07 — Allowed statutory + profile fields
   // cin, tan, pt_state, brand_name, registered_address,
@@ -194,11 +237,16 @@ exports.updateCompany = async (companyId, payload, reqUser) => {
   // company_name, company_phone, logo_url, company_size,
   // working_hours, year_type, leave_policy, pay_schedule
 
-  const company = await Company.findOneAndUpdate(
-    { _id: companyId, org_id: reqUser.orgId, is_deleted: false },
-    { ...payload, updatedBy: reqUser.userId },
-    { new: true, runValidators: true }
-  );
+  let company;
+  try {
+    company = await Company.findOneAndUpdate(
+      filter,
+      { ...payload, updatedBy: reqUser.userId },
+      { new: true, runValidators: true }
+    );
+  } catch (err) {
+    throw duplicateCompanyError(err);
+  }
   if (!company) throw new AppError("Company not found", 404);
   return company;
 };
@@ -210,7 +258,7 @@ exports.deleteCompany = async (companyId, reqUser) => {
   });
   if (!company) throw new AppError("Company not found", 404);
 
-  // Employee check add karo
+  // Check for linked employees
   const Employee = require("../employee/models/employee.model");
   const activeEmployees = await Employee.countDocuments({
     company_id: companyId,

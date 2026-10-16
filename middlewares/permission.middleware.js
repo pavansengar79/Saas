@@ -2,12 +2,12 @@
 //
 // 3-layer auth check — ALL 3 must pass on every protected request.
 //
-// LAYER 1 — Subscription: org ka plan active hai?
-// LAYER 2 — Module: required module org + company level pe active hai?
+// LAYER 1 — Subscription: is the organisation's plan active?
+// LAYER 2 — Module: is the required module active at the org or company level?
 //           FIXED: org OFF + company ON = allowed (company-specific module)
 //           org ON  + company OFF = blocked for this company
-// LAYER 3 — Permission: role ke paas required permission slug hai?
-//         + DELEGATION: agar role mein nahi, active delegation check karo
+// LAYER 3 — Permission: does the role have the required permission slug?
+//         + DELEGATION: if not, check for an active delegation
 //
 // Super Admin / product_admin — bypass all 3.
 //
@@ -225,8 +225,8 @@ module.exports = (requiredPermission) => {
 
       if (!hasPermission) {
         // ── DELEGATION CHECK ───────────────────────────────────
-        // Role mein permission nahi — check karo koi active delegation hai?
-        // Delegation = kisi ne temporarily yeh permission is user ko di hai
+        // Role lacks this permission — check for an active delegation.
+        // A delegation temporarily grants this user the permission.
         try {
           const now = new Date();
           const activeDelegation = await Delegation.findOne({
@@ -239,8 +239,8 @@ module.exports = (requiredPermission) => {
           }).lean();
 
           if (activeDelegation) {
-            // Delegation se permission mili — allow
-            req.delegationId = activeDelegation._id; // audit ke liye attach
+            // Permission granted through delegation — allow
+            req.delegationId = activeDelegation._id; // Attach for auditing
             return next();
           }
         } catch (_) {

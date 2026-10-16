@@ -58,9 +58,9 @@ const subscriptionSchema = new mongoose.Schema(
       // e.g. ["employee", "attendance", "leave", "payroll", "auth"]
 
       // ─── Feature Gates snapshot ───────────────────────────
-      // plan.features[] ka copy at purchase time
-      // checkFeature.middleware.js yahi check karta hai — live plan nahi
-      // Agar Super Admin plan update kare, existing customers affect nahi honge
+      // Copy of plan.features[] at purchase time
+      // checkFeature.middleware.js checks this, not the live plan
+      // If the Super Admin updates the plan, existing customers are unaffected
       features: { type: [String], default: [] },
     },
 

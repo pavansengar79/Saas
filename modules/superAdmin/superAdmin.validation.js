@@ -9,13 +9,13 @@ exports.tenantListSchema = Joi.object({
   plan: Joi.string()
     .valid("TRIAL", "BASIC", "PRO", "ENTERPRISE")
     .messages({
-      "any.only": "Plan sirf TRIAL, BASIC, PRO, ya ENTERPRISE ho sakta hai"
+      "any.only": "Plan must be TRIAL, BASIC, PRO, or ENTERPRISE."
     }),
 
   status: Joi.string()
     .valid("Active", "Pending", "Suspended", "Inactive").insensitive()
     .messages({
-      "any.only": "Status sirf Active, Pending, Suspended, ya Inactive ho sakta hai"
+      "any.only": "Status must be Active, Pending, Suspended, or Inactive."
     }),
 
   search: Joi.string().trim().max(100),
@@ -29,22 +29,16 @@ exports.planOverrideSchema = Joi.object({
   planId: Joi.string()
     .pattern(/^[0-9a-fA-F]{24}$/)
     .required()
-    .messages({ "string.pattern.base": "Invalid planId format" }),
-
-  reason: Joi.string().trim().max(500).optional()
-    .messages({
-      "any.only": "Plan sirf TRIAL, BASIC, PRO, ya ENTERPRISE ho sakta hai",
-      "any.required": "Plan required hai",
-    }),
+    .messages({ "string.pattern.base": "Invalid planId format", "any.required": "Plan ID is required." }),
 
   reason: Joi.string().min(10).max(500).trim().required()
     .messages({
-      "string.min": "Reason kam se kam 10 characters ka hona chahiye",
-      "any.required": "Reason required hai",
+      "string.min": "Reason must be at least 10 characters long.",
+      "any.required": "Reason is required.",
     }),
 });
 
-// Audit Log filters (2.2 ke liye)
+// Audit Log filters (for 2.2)
 exports.auditLogQuerySchema = Joi.object({
   actor:  Joi.string().hex().length(24),
   action: Joi.string().valid(

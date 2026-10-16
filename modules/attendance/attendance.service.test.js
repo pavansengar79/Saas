@@ -5,6 +5,7 @@ const Attendance = require('./models/attendance.model');
 const Employee = require('../employee/models/employee.model');
 const Holiday = require('../holiday/models/holiday.models');
 const LeaveRequest = require('../leave/models/leaveRequest.models');
+const CompanyConfig = require('../companyConfig/models/companyConfig.model');
 const attendanceValidation = require('./attendance.validation');
 const { getMyAttendance, getMySummary, getTeamAttendance, getAllAttendance } = require('./attendance.service');
 
@@ -13,6 +14,7 @@ test('self attendance detail and summary use the same tenant and month filter', 
     attendanceFind: Attendance.find,
     attendanceAggregate: Attendance.aggregate,
     employeeFindOne: Employee.findOne,
+    configFindOne: CompanyConfig.findOne,
   };
 
   const employee = {
@@ -31,6 +33,7 @@ test('self attendance detail and summary use the same tenant and month filter', 
   let summaryFilter;
 
   try {
+    CompanyConfig.findOne = () => ({ select() { return this; }, lean: async () => ({ timezone: 'Asia/Kolkata' }) });
     Employee.findOne = async (filter) => {
       assert.deepEqual(filter, {
         userId: 'user-id',
@@ -56,20 +59,20 @@ test('self attendance detail and summary use the same tenant and month filter', 
     await getMyAttendance({ month: '2026-10' }, user);
     await getMySummary({ month: '2026-10' }, user);
 
-    assert.deepEqual(detailFilter, summaryFilter);
+    assert.deepEqual({ ...detailFilter, unit_id: employee.unit_id }, summaryFilter);
     assert.equal(detailFilter.org_id, employee.org_id);
     assert.equal(detailFilter.company_id, employee.company_id);
-    assert.equal(detailFilter.unit_id, employee.unit_id);
     assert.equal(detailFilter.employeeId, employee._id);
     assert.equal(detailFilter.isDeleted, false);
     assert.deepEqual(detailFilter.date, {
-      $gte: new Date('2026-10-01T00:00:00.000Z'),
-      $lt: new Date('2026-11-01T00:00:00.000Z'),
+      $gte: new Date('2026-09-30T18:30:00.000Z'),
+      $lt: new Date('2026-10-31T18:30:00.000Z'),
     });
   } finally {
     Attendance.find = original.attendanceFind;
     Attendance.aggregate = original.attendanceAggregate;
     Employee.findOne = original.employeeFindOne;
+    CompanyConfig.findOne = original.configFindOne;
   }
 });
 
@@ -87,7 +90,7 @@ test('self attendance validators accept optional scope IDs used by existing clie
   }
 });
 
-test('team and HR overviews count missing weekdays independently of paginated rows', async () => {
+test('team summary counts missing weekdays independently of paginated rows', async () => {
   const original = {
     attendanceFind: Attendance.find,
     attendanceCount: Attendance.countDocuments,
@@ -95,53 +98,55 @@ test('team and HR overviews count missing weekdays independently of paginated ro
     employeeFindOne: Employee.findOne,
     holidayFind: Holiday.find,
     leaveFind: LeaveRequest.find,
+    configFindOne: CompanyConfig.findOne,
   };
   const manager = { _id: 'manager-id' };
   const teammate = { _id: 'teammate-id' };
   const attendanceRecord = { employeeId: manager._id, date: new Date('2020-01-06T06:00:00Z'), status: 'PRESENT' };
 
   try {
+    CompanyConfig.findOne = () => ({ select() { return this; }, lean: async () => ({ timezone: 'Asia/Kolkata' }) });
     Employee.findOne = () => ({ select: async () => manager });
-    Employee.find = () => ({ select: async () => [manager, teammate] });
+    Employee.find = () => ({ select() { return this; }, lean: async () => [manager, teammate], then(resolve) { return Promise.resolve([manager, teammate]).then(resolve); } });
     Attendance.find = () => ({
       populate() { return this; },
       sort() { return this; },
       skip() { return this; },
       limit() { return this; },
-      select: async () => [attendanceRecord],
+      select() { return this; },
+      lean: async () => [attendanceRecord],
     });
     Attendance.countDocuments = async () => 1;
-    Holiday.find = () => ({ select: async () => [] });
-    LeaveRequest.find = () => ({ select: async () => [] });
+    Holiday.find = () => ({ select() { return this; }, lean: async () => [] });
+    LeaveRequest.find = () => ({ populate() { return this; }, select() { return this; }, lean: async () => [] });
 
     const query = { startDate: '2020-01-06', endDate: '2020-01-07', page: 1, limit: 1 };
     const user = { userId: 'user-id', orgId: 'org-id', companyId: 'company-id' };
     const teamResult = await getTeamAttendance(query, user);
     const hrResult = await getAllAttendance(query, user);
 
-    for (const result of [teamResult, hrResult]) {
-      assert.equal(result.records.length, 1);
-      assert.equal(result.overview.present, 1);
-      assert.equal(result.overview.absent, 3);
-      assert.equal(result.overview.late, 0);
-    }
+    assert.equal(teamResult.records.length, 1);
+    assert.equal(teamResult.summary.present, 1);
+    assert.equal(teamResult.summary.absent, 3);
+    assert.equal(teamResult.summary.late, 0);
+    assert.equal(hrResult.records.length, 1);
 
-    Employee.find = () => ({ select: async () => [manager, {
+    Employee.find = () => ({ select() { return this; }, lean: async () => [manager, {
       ...teammate, joiningDate: new Date('2020-01-07T00:00:00Z'),
-    }] });
+    }], then(resolve) { return Promise.resolve([manager, teammate]).then(resolve); } });
     const afterJoining = await getTeamAttendance(query, user);
-    assert.equal(afterJoining.overview.absent, 2);
-    Employee.find = () => ({ select: async () => [manager, teammate] });
+    assert.equal(afterJoining.summary.absent, 2);
+    Employee.find = () => ({ select() { return this; }, lean: async () => [manager, teammate], then(resolve) { return Promise.resolve([manager, teammate]).then(resolve); } });
 
-    Holiday.find = () => ({ select: async () => [{ date: new Date('2020-01-07T06:00:00Z') }] });
-    LeaveRequest.find = () => ({ select: async () => [{
+    Holiday.find = () => ({ select() { return this; }, lean: async () => [{ date: new Date('2020-01-07T06:00:00Z') }] });
+    LeaveRequest.find = () => ({ populate() { return this; }, select() { return this; }, lean: async () => [{
       employeeId: teammate._id,
       startDate: new Date('2020-01-06T06:00:00Z'),
       endDate: new Date('2020-01-06T18:00:00Z'),
     }] });
     const withTimeOff = await getTeamAttendance(query, user);
-    assert.equal(withTimeOff.overview.absent, 0);
-    assert.equal(withTimeOff.overview.onLeave, 1);
+    assert.equal(withTimeOff.summary.absent, 0);
+    assert.equal(withTimeOff.summary.onLeave, 1);
   } finally {
     Attendance.find = original.attendanceFind;
     Attendance.countDocuments = original.attendanceCount;
@@ -149,5 +154,6 @@ test('team and HR overviews count missing weekdays independently of paginated ro
     Employee.findOne = original.employeeFindOne;
     Holiday.find = original.holidayFind;
     LeaveRequest.find = original.leaveFind;
+    CompanyConfig.findOne = original.configFindOne;
   }
 });

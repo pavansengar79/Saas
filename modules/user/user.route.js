@@ -14,7 +14,7 @@ const validate                         = require("../../middlewares/validate.mid
 const { inviteUserSchema, updateUserSchema } = require("./user.validation");
 const { upload }                        = require("../../config/cloudinary");
 
-// ── Global guards — sab routes ke liye ───────────────────────
+// ── Global guards for all routes ─────────────────────────────
 router.use(authenticate);
 router.use(requireTenantUser);
 
@@ -47,7 +47,7 @@ router.post(
 
 // ── GET /users/:id/progression ────────────────────────────────
 // Requires: employee.read permission
-// IMPORTANT: /progression pehle register karo — /:id se match ho jaata hai
+// IMPORTANT: Register /progression before /:id to avoid matching /:id
 router.get(
   "/:id/progression",
   checkPermission("employee.read"),
