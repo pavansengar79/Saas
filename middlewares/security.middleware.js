@@ -14,7 +14,7 @@ const securityMiddleware = (app) => {
   // CORS Configuration
   app.use(
     cors({
-      origin: "*", // later frontend domain add karna
+      origin: "*", // Add the frontend domain later
       methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
       credentials: true
     })

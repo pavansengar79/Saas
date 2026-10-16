@@ -20,12 +20,12 @@ exports.inviteUserSchema = Joi.object({
     "any.required": "Role is required",
   }),
 
-  // Unit level role ke liye service layer me validate hoga
+  // Validate unit-level roles in the service layer
   departmentId: objectId.optional().allow(null),
-    // Org Admin company assign kar sake
+    // Allow Org Admin to assign a company
   company_id: objectId.optional().allow(null),
 
-  // Company Admin unit assign kar sake
+  // Allow Company Admin to assign a unit
   unit_id: objectId.optional().allow(null),
 });
 
@@ -50,6 +50,8 @@ exports.updateUserSchema = Joi.object({
 
   status: Joi.string()
     .valid("ACTIVE", "INACTIVE", "BLOCKED"),
+
+  confirmCompanyAdminDeactivation: Joi.boolean().strict(),
 
   note: Joi.string()
     .trim()

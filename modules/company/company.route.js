@@ -26,7 +26,7 @@ router.put(   "/:id", authenticate, checkPermission("company.update"), controlle
 router.delete("/:id", authenticate, checkPermission("company.delete"), controller.deleteCompany);
 
 // ── Company Module Management ─────────────────────────────────
-// GET  /companies/:id/modules → company ke active modules
+// GET  /companies/:id/modules → active modules for the company
 // PUT  /companies/:id/modules → enable/disable modules per company
 router.get("/:id/modules", authenticate, checkPermission("company.read"),   moduleController.getCompanyModules);
 router.put("/:id/modules", authenticate, checkPermission("company.update"), moduleController.updateCompanyModules);

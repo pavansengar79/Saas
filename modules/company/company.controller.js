@@ -6,7 +6,7 @@ const AppError = require("../../utils/appError");
 exports.createCompany = async (req, res, next) => {
   try {
     const company = await companyService.createCompany(req.body, req.user);
-    return res.status(201).json({ success: true, message: "Company created successfully", data: company });
+    return res.status(201).json({ success: true, message: company.message, data: company });
   } catch (err) { next(err); }
 };
 

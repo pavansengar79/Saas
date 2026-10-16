@@ -3,19 +3,19 @@ const mongoose = require("mongoose");
 
 const auditLogSchema = new mongoose.Schema(
   {
-    // Kisne kiya
+    // Who performed the action
     actor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      default: null, // Super Admin ka DB record nahi hota
+      default: null, // Super Admin has no database record
     },
 
     actorEmail: {
       type: String,
-      required: true, // snapshot — user delete ho jaye toh bhi log rahe
+      required: true, // snapshot — keep the log even if the user is deleted
     },
 
-    // Kya kiya
+    // What action was performed
     action: {
       type: String,
       required: true,
@@ -31,7 +31,7 @@ const auditLogSchema = new mongoose.Schema(
       enum: ["superAdmin", "auth"],
     },
 
-    // Kis tenant pe
+    // Which tenant was affected
     targetTenantId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Tenant",
@@ -44,7 +44,7 @@ const auditLogSchema = new mongoose.Schema(
       default: {},
     },
 
-    // IP address log karo
+    // Log the IP address
     ipAddress: {
       type: String,
       default: null,
@@ -56,12 +56,12 @@ const auditLogSchema = new mongoose.Schema(
   }
 );
 
-// Indexes — frequent queries ke liye
+// Indexes — for frequent queries
 auditLogSchema.index({ actorEmail: 1, createdAt: -1 });
 auditLogSchema.index({ action: 1, createdAt: -1 });
 auditLogSchema.index({ targetTenantId: 1 });
 auditLogSchema.index({ createdAt: -1 });
 
-// Audit logs permanent hain — soft delete nahi, pre hook nahi
+// Audit logs are permanent — no soft delete or pre hook
 
 module.exports = mongoose.models.AuditLog || mongoose.model("AuditLog", auditLogSchema);

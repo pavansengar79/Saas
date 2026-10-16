@@ -12,9 +12,9 @@ const { authorizeRoles } = require("../../middlewares/role.middleware");
 router.get("/public",     controller.getPublicPlans);
 router.get("/:id/public", controller.getPlanById);
 
-// ── Authenticated — current user ka plan features ─────────────
+// ── Authenticated — current user's plan features ─────────────
 // MUST be before /:id to avoid Express route conflict
-// Frontend app load pe yahi call kare — feature gates cache karo
+// Call on frontend app load to cache feature gates
 router.get("/my-features", authenticate, controller.getMyFeatures);
 
 // ── Get current subscription plan details for org/company admins ─────

@@ -7,7 +7,7 @@ const Role = require('../role/role.model');
 const UserProgression = require('./models/userProgression.model');
 const { getUsers, updateUser } = require('./user.service');
 
-test('getUsers resolves unlinked unit Employee photos without crossing units', async () => {
+test('getUsers only uses linked Employee photos within company scope', async () => {
   const original = {
     userFind: User.find,
     userCountDocuments: User.countDocuments,
@@ -67,10 +67,8 @@ test('getUsers resolves unlinked unit Employee photos without crossing units', a
     Employee.find = (filter) => {
       assert.equal(filter.company_id, 'company-one');
       assert.equal(filter.isDeleted, false);
-      assert.deepEqual(filter.$or[1], {
-        userId: null,
-        email: { $in: users.map((user) => user.email) },
-      });
+      assert.deepEqual(filter.userId, { $in: users.map((user) => user._id) });
+      assert.equal(filter.$or, undefined);
       return {
         select() { return this; },
         populate: async () => employees,
@@ -79,7 +77,7 @@ test('getUsers resolves unlinked unit Employee photos without crossing units', a
 
     const result = await getUsers({}, { level: 'company', orgId: 'org-one', companyId: 'company-one' });
 
-    assert.equal(result.users[0].profilePhoto, 'employee-photo');
+    assert.equal(result.users[0].profilePhoto, null);
     assert.equal(result.users[1].profilePhoto, 'user-photo');
     assert.equal(result.users[2].profilePhoto, 'linked-photo');
   } finally {
@@ -91,7 +89,7 @@ test('getUsers resolves unlinked unit Employee photos without crossing units', a
   }
 });
 
-test('updateUser rejects a parent-to-child role downgrade', async () => {
+test('updateUser rejects assigning a unit role from an org admin', async () => {
   const original = {
     userFindOne: User.findOne,
     roleFindOne: Role.findOne,
@@ -109,9 +107,9 @@ test('updateUser rejects a parent-to-child role downgrade', async () => {
         lean: async () => ({ slug: 'employee', level: 'unit' }),
       }),
     });
-    Role.findById = () => ({
+    Role.findById = (id) => ({
       select: () => ({
-        lean: async () => ({ level: 'company' }),
+        lean: async () => ({ level: id === 'unit-role' ? 'unit' : 'company' }),
       }),
     });
 
@@ -121,7 +119,7 @@ test('updateUser rejects a parent-to-child role downgrade', async () => {
         userId: 'org-admin',
         orgId: 'org-one',
       }),
-      /cannot downgrade the user's level/
+      { statusCode: 403, message: /cannot assign unit level role/i }
     );
   } finally {
     User.findOne = original.userFindOne;
@@ -130,7 +128,7 @@ test('updateUser rejects a parent-to-child role downgrade', async () => {
   }
 });
 
-test('updateUser allows company admin to promote a unit user and clears unit scope', async () => {
+test('updateUser prevents company admins from promoting unit users outside their role scope', async () => {
   const original = {
     userFindOne: User.findOne,
     userFindById: User.findById,
@@ -150,7 +148,7 @@ test('updateUser allows company admin to promote a unit user and clears unit sco
     };
     User.findOne = async (filter) => {
       assert.equal(filter.company_id, 'company-one');
-      assert.equal(Object.hasOwn(filter, 'unit_id'), false);
+      assert.equal(filter.unit_id, null);
       return targetUser;
     };
     Role.findOne = () => ({
@@ -158,9 +156,9 @@ test('updateUser allows company admin to promote a unit user and clears unit sco
         lean: async () => ({ slug: 'company_hr_manager', level: 'company' }),
       }),
     });
-    Role.findById = () => ({
+    Role.findById = (id) => ({
       select: () => ({
-        lean: async () => ({ level: 'unit' }),
+        lean: async () => ({ level: id === 'company-role' ? 'company' : 'unit' }),
       }),
     });
     UserProgression.create = async () => {};
@@ -172,16 +170,17 @@ test('updateUser allows company admin to promote a unit user and clears unit sco
       lean: async () => ({ roleId: 'company-role', unit_id: null }),
     });
 
-    const result = await updateUser('target-user', { roleId: 'company-role' }, {
-      level: 'company',
-      userId: 'company-admin',
-      orgId: 'org-one',
-      companyId: 'company-one',
-    });
-
-    assert.equal(targetUser.roleId, 'company-role');
-    assert.equal(targetUser.unit_id, null);
-    assert.equal(result.unit_id, null);
+    await assert.rejects(
+      updateUser('target-user', { roleId: 'company-role' }, {
+        level: 'company',
+        userId: 'company-admin',
+        orgId: 'org-one',
+        companyId: 'company-one',
+      }),
+      { statusCode: 403, message: /Cannot promote user from unit to company level/ }
+    );
+    assert.equal(targetUser.roleId, 'unit-role');
+    assert.equal(targetUser.unit_id, 'unit-one');
   } finally {
     User.findOne = original.userFindOne;
     User.findById = original.userFindById;

@@ -1,28 +1,28 @@
 // modules/shift/models/shiftSwapRequest.model.js
 //
-// ShiftSwapRequest = Employee A apni shift Employee B se swap karna chahta hai
-// for a specific date.
+// ShiftSwapRequest = Employee A requests to swap shifts with Employee B
+// on a specific date.
 //
 // Flow:
 //   Employee A → raises swap request (selects B + date)
 //   Employee B → notified, accepts or declines
-//   Manager    → final approve/reject (agar B ne accept kiya)
-//   On approve → dono ke roster/attendance update hote hain
+//   Manager    → gives final approval or rejection (if B accepts)
+//   On approval → both employees' rosters/attendance are updated
 //
 // Dynamic design:
-//   - approvalType configurable — sirf manager, ya B acceptance + manager dono
-//   - Koi bhi shift hard-reference nahi — shiftA/shiftB roster se resolve hote hain
+//   - approvalType is configurable — manager only, or B's acceptance followed by manager approval
+//   - No shifts are hard-coded — the employees' shifts are resolved from their rosters
 //   - comment mandatory on rejection (configurable in service)
 //   - Full approvalHistory maintained (audit trail)
 //
 // Status flow:
-//   PENDING_ACCEPTANCE  → B ne abhi accept/decline nahi kiya
-//   PENDING_APPROVAL    → B ne accept kiya, manager ke paas hai
-//   APPROVED            → Manager ne approve kiya, rosters updated
-//   REJECTED_BY_B       → B ne decline kiya
-//   REJECTED_BY_MANAGER → Manager ne reject kiya
-//   CANCELLED           → A ne khud cancel kiya (before B action)
-//   EXPIRED             → requestedDate guzar gayi, no action taken
+//   PENDING_ACCEPTANCE  → B has not accepted or declined yet
+//   PENDING_APPROVAL    → B accepted; awaiting the manager's decision
+//   APPROVED            → Manager approved; rosters updated
+//   REJECTED_BY_B       → B declined
+//   REJECTED_BY_MANAGER → Manager rejected
+//   CANCELLED           → A cancelled the request (before B acted)
+//   EXPIRED             → The requested date passed without action
 
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
@@ -85,7 +85,7 @@ const shiftSwapRequestSchema = new Schema(
 
     // ─── Parties ───────────────────────────────────────────
 
-    // Employee jo swap maang raha hai
+    // Employee requesting the swap
     requesterEmployeeId: {
       type:     Schema.Types.ObjectId,
       ref:      "Employee",
@@ -99,7 +99,7 @@ const shiftSwapRequestSchema = new Schema(
       required: true,
     },
 
-    // Employee jisse swap maanga gaya hai
+    // Employee asked to swap shifts
     requestedEmployeeId: {
       type:     Schema.Types.ObjectId,
       ref:      "Employee",
@@ -114,22 +114,22 @@ const shiftSwapRequestSchema = new Schema(
     },
 
     // ─── Shift Details ─────────────────────────────────────
-    // Swap date — sirf ek din ke liye (multi-day swap alag request se)
+    // Swap date — for one day only (multi-day swaps require separate requests)
     swapDate: {
       type:     Date,
       required: [true, "swapDate is required"],
       index:    true,
-      // Service validate karega: swapDate >= today
+      // The service validates that swapDate >= today
     },
 
-    // Requester ki shift on swapDate (roster se resolve karke save)
-    // Denormalized for display — roster change pe yeh stale ho sakta hai
+    // Requester's shift on swapDate (resolved from the roster and saved)
+    // Denormalized for display — may become stale if the roster changes
     // Service always re-checks roster on approval
     requesterShiftId: {
       type:    Schema.Types.ObjectId,
       ref:     "Shift",
       default: null,
-      // null allowed — agar requester ka koi roster nahi, default shift assume hogi
+      // null allowed — if the requester has no roster, use the default shift
     },
 
     requesterShiftName: {
@@ -138,7 +138,7 @@ const shiftSwapRequestSchema = new Schema(
       // Snapshot at request time for display (e.g. "Morning Shift 09:00-18:00")
     },
 
-    // Requested employee ki shift on swapDate
+    // Requested employee's shift on swapDate
     requestedShiftId: {
       type:    Schema.Types.ObjectId,
       ref:     "Shift",
@@ -156,13 +156,13 @@ const shiftSwapRequestSchema = new Schema(
       trim:      true,
       maxlength: 500,
       default:   "",
-      // Optional — HR/manager ke liye context
+      // Optional — provides context for HR/the manager
     },
 
     // ─── Approval Config ───────────────────────────────────
     // Who needs to approve this swap?
-    // "MANAGER_ONLY"       → sirf manager approve/reject kare
-    // "EMPLOYEE_THEN_MANAGER" → pehle B accept kare, phir manager
+    // "MANAGER_ONLY"       → only the manager approves or rejects
+    // "EMPLOYEE_THEN_MANAGER" → B accepts first, then the manager decides
     // Set by service based on unit's attendance policy / company config
     approvalType: {
       type:    String,
@@ -183,13 +183,13 @@ const shiftSwapRequestSchema = new Schema(
     status: {
       type:  String,
       enum:  [
-        "PENDING_ACCEPTANCE",   // B ne abhi response nahi diya
-        "PENDING_APPROVAL",     // B ne accept kiya, manager ke paas
+        "PENDING_ACCEPTANCE",   // B has not responded yet
+        "PENDING_APPROVAL",     // B accepted; awaiting the manager's decision
         "APPROVED",             // Swap complete, rosters updated
-        "REJECTED_BY_B",        // B ne decline kiya
-        "REJECTED_BY_MANAGER",  // Manager ne reject kiya
-        "CANCELLED",            // A ne cancel kiya
-        "EXPIRED",              // swapDate guzar gayi
+        "REJECTED_BY_B",        // B declined
+        "REJECTED_BY_MANAGER",  // Manager rejected
+        "CANCELLED",            // A cancelled the request
+        "EXPIRED",              // swapDate has passed
       ],
       default: "PENDING_ACCEPTANCE",
       index:   true,
@@ -283,7 +283,7 @@ shiftSwapRequestSchema.index({
   is_deleted: 1,
 });
 
-// Employee A — apni requests dekhe
+// Employee A — view their own requests
 shiftSwapRequestSchema.index({
   requesterEmployeeId: 1,
   status:              1,

@@ -5,7 +5,7 @@
 
 const payslipService = require("./payslip.service");
 
-// GET /api/v1/payslips/my — employee apne payslips dekhe
+// GET /api/v1/payslips/my — employee views their own payslips
 exports.getMyPayslips = async (req, res, next) => {
   try {
     const data = await payslipService.getMyPayslips(req.query, req.user);

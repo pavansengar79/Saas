@@ -100,7 +100,7 @@ router.get(
   bulkExportController.exportEmployees
 );
 
-// E-08 — Apna profile update karo (sirf phone, address, emergencyContact, profilePhoto)
+// E-08 — Update your own profile (phone, address, emergency contact, and profile photo only)
 router.put(
   "/me",
   authenticate,
@@ -120,7 +120,7 @@ router.put(
   employeeController.updateEmployee
 );
 
-// E-09 — Apne documents dekho aur download karo
+// E-09 — View and download your own documents
 router.get("/me/documents", authenticate, employeeController.getMyDocuments);
 
 // E-10 — Profile completion score

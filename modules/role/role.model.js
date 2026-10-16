@@ -68,7 +68,7 @@ const roleSchema = new Schema(
       },
     ],
 
-    // T-01 — User class (Pavan Ji's decision)
+    // T-01 — User class (Pavan's decision)
     // Administrative → can configure system (Org Admin, Company Admin, HR Manager, Unit Admin)
     // Privilege       → functional access on top of General User base (Finance Mgr, Sales Head)
     // General         → baseline self-service (Employee — auto-assigned)

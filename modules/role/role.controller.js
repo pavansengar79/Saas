@@ -1,5 +1,5 @@
 // modules/role/role.controller.js
-// UPDATED — tenantId removed, req.user pass karo service mein
+// UPDATED — tenantId removed; pass req.user to the service
 
 const roleService = require("./role.service");
 

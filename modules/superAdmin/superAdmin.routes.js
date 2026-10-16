@@ -16,15 +16,15 @@ router.post(
   ctrl.publicRegister
 );
 
-// ── Customer org create — superAdminGuard se BAHAR ───────────
-// Yeh route customer token se access hoga
+// ── Customer org creation — outside superAdminGuard ───────────
+// This route is accessed with a customer token
 router.post(
   "/customers/create-org",
   customerAuthenticate,
   ctrl.createOrgForCustomer
 );
 
-// ── Baki sab super admin only ─────────────────────────────────
+// ── All remaining routes are super admin only ─────────────────
 router.use(authenticate);
 router.use(superAdminGuard);
 

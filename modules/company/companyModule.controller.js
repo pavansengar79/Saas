@@ -1,9 +1,9 @@
 // modules/company/companyModule.controller.js
 //
-// Company Module Management — Org Admin karta hai
+// Company Module Management — handled by the Org Admin
 //
 // GET  /companies/:id/modules
-//   → company ke saare modules return karo (org modules ke against)
+//   → return all company modules (compared against org modules)
 //   → shows which are active/inactive for this specific company
 //
 // PUT  /companies/:id/modules

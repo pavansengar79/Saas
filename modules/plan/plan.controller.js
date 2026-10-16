@@ -66,8 +66,8 @@ exports.deletePlan = async (req, res, next) => {
   }
 };
 // GET /plans/my-features
-// Logged-in user ke plan ki features return karo
-// Frontend use kare for feature gates + upgrade prompts
+// Return the logged-in user's plan features
+// The frontend uses these for feature gates and upgrade prompts
 exports.getMyFeatures = async (req, res, next) => {
   try {
     const result = await planService.getMyFeatures(req.user);

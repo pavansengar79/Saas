@@ -98,7 +98,7 @@ exports.login = async (payload) => {
     };
   }
 
-  // ── Regular User PEHLE ───────────────────────────────────
+  // ── Regular user first ───────────────────────────────────
   const user = await User.findOne({ email, is_deleted: false })
     .select("+password -refreshTokens")
     .populate({
@@ -234,7 +234,7 @@ exports.login = async (payload) => {
     };
   }
 
-  // ── Customer BAAD MEIN ────────────────────────────────────
+  // ── Customer afterward ────────────────────────────────────
   const customer = await Customer.findOne({
     contact_email: email.toLowerCase().trim(),
     is_deleted:    false,
@@ -279,7 +279,7 @@ exports.login = async (payload) => {
     };
   }
 
-  // Koi nahi mila
+  // No matching account found
   throw new AppError("Invalid credentials", 401);
 };
 

@@ -1,28 +1,26 @@
 // modules/delegation/models/delegation.model.js
 //
-// Delegation = ek user temporarily apni specific permissions
-//              kisi doosre user ko de sakta hai.
+// Delegation lets a user temporarily grant specific permissions
+// to another user.
 //
 // Real world example:
-//   Rahul (Manager) 2 hafte leave pe ja raha hai.
-//   Woh Priya ko temporarily "leave.approve" aur "attendance.approve"
-//   permissions deta hai for Jun 15 - Jun 30.
-//   Priya ke apne role mein yeh permissions nahi hain —
-//   lekin is duration mein permission.middleware.js
-//   active delegation bhi check karega.
+//   Rahul (Manager) is going on leave for two weeks.
+//   He grants Priya "leave.approve" and "attendance.approve"
+//   permissions temporarily from Jun 15 to Jun 30.
+//   Priya's own role does not have these permissions, but during
+//   this period the permission middleware checks active delegations.
 //
 // Dynamic design:
-//   - Koi bhi permission delegate ho sakti hai (role ke scope ke andar)
-//   - startDate + endDate fully configurable — koi min/max nahi
-//   - approvalRequired: true → manager ki delegation ko uske upar ka
-//     approve karna pad sakta hai (configurable per org)
-//   - maxDelegationDays: company config se aayega, model mein hardcode nahi
-//   - Ek user ek saath multiple delegations de sakta hai
-//   - Ek user multiple delegations receive kar sakta hai
-//   - Same permission ek hi waqt mein ek hi person ko sirf ek baar
-//     delegate ho sakti hai (service layer enforce karega)
+//   - Any permission within the role's scope can be delegated.
+//   - startDate and endDate are configurable; no minimum or maximum is hardcoded.
+//   - approvalRequired: true may require approval from a manager or HR,
+//     depending on the organization's configuration.
+//   - maxDelegationDays comes from company configuration, not this model.
+//   - A user can grant and receive multiple delegations at once.
+//   - The same permission can be delegated to the same person only once
+//     at a time (enforced by the service layer).
 //
-// permission.middleware.js Layer 3 mein kaise use hoga:
+// How the permission middleware checks delegations in layer 3:
 //   if (!roleHasPermission) {
 //     const delegation = await Delegation.findOne({
 //       delegatee_id: req.user.userId,
@@ -36,17 +34,17 @@
 //   }
 //
 // Status flow:
-//   PENDING  → approvalRequired:true mein, upar wale ka wait
-//   ACTIVE   → startDate aa gayi, in effect
-//   EXPIRED  → endDate guzar gayi (cron set karega)
-//   REVOKED  → delegator ne wapas liya before endDate
-//   REJECTED → approver ne reject kiya
+//   PENDING  → waiting for approval when approvalRequired is true
+//   ACTIVE   → in effect from startDate
+//   EXPIRED  → endDate has passed (set by the scheduled job)
+//   REVOKED  → withdrawn by the delegator before endDate
+//   REJECTED → rejected by the approver
 
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 // ─── Action History Sub-Schema ───────────────────────────────
-// Har change log hoga — same pattern as leaveRequest + shiftSwap
+// Log every change, as with leave requests and shift swaps.
 const delegationActionSchema = new Schema(
   {
     // "DELEGATOR" | "APPROVER" | "SYSTEM"
@@ -103,7 +101,7 @@ const delegationSchema = new Schema(
 
     // ─── Parties ───────────────────────────────────────────
 
-    // Jo permissions de raha hai
+    // User granting the permissions
     delegator_id: {
       type:     Schema.Types.ObjectId,
       ref:      "User",
@@ -111,7 +109,7 @@ const delegationSchema = new Schema(
       index:    true,
     },
 
-    // Jisko permissions mil rahi hain
+    // User receiving the permissions
     delegatee_id: {
       type:     Schema.Types.ObjectId,
       ref:      "User",
@@ -120,13 +118,13 @@ const delegationSchema = new Schema(
     },
 
     // ─── Permissions ───────────────────────────────────────
-    // Kaunsi specific permissions delegate ho rahi hain
+    // Specific permissions being delegated
     // Array of Permission ObjectIds
-    // Service validate karega:
+    // The service validates:
     //   1. Permission exists + is_active
-    //   2. Delegator ke role mein yeh permission hai
-    //      (sirf apni permissions hi delegate kar sakte ho)
-    //   3. Permission ka scope delegator ke level ke andar hai
+    //   2. The delegator's role has the permission.
+    //      Users can delegate only their own permissions.
+    //   3. The permission's scope is within the delegator's level.
     permissions: {
       type:     [Schema.Types.ObjectId],
       ref:      "Permission",
@@ -170,8 +168,8 @@ const delegationSchema = new Schema(
 
     // ─── Approval (optional) ───────────────────────────────
     // If company config has requireDelegationApproval: true,
-    // delegator ke upar wale (manager/HR) ko approve karna padega.
-    // Default false — delegation turant active ho jaati hai.
+    // a manager or HR above the delegator must approve it.
+    // By default approval is not required, so the delegation activates immediately.
     approvalRequired: {
       type:    Boolean,
       default: false,
@@ -197,11 +195,11 @@ const delegationSchema = new Schema(
       enum:  [
         "PENDING",   // approvalRequired:true, waiting for approver
         "ACTIVE",    // in effect — permission.middleware checks this
-        "EXPIRED",   // endDate guzar gayi — cron sets this
-        "REVOKED",   // delegator ne manually wapas liya
-        "REJECTED",  // approver ne reject kiya
+        "EXPIRED",   // endDate has passed; the scheduled job sets this.
+        "REVOKED",   // manually withdrawn by the delegator
+        "REJECTED",  // rejected by the approver
       ],
-      default: "ACTIVE", // default ACTIVE kyunki approvalRequired default false hai
+      default: "ACTIVE", // ACTIVE by default because approvalRequired defaults to false.
       index:   true,
     },
 
@@ -211,7 +209,7 @@ const delegationSchema = new Schema(
     revocationReason: { type: String, trim: true, maxlength: 500, default: null },
 
     // ─── Notification Tracking ─────────────────────────────
-    // Delegatee ko email gayi ya nahi
+    // Whether an email was sent to the recipient
     notifiedAt: {
       type:    Date,
       default: null,
@@ -271,8 +269,8 @@ delegationSchema.virtual("daysRemaining").get(function () {
 
 // ─── Indexes ─────────────────────────────────────────────────
 
-// CRITICAL — permission.middleware.js Layer 3 use karega yeh index
-// "Is delegatee ke liye koi active delegation hai for this permission?"
+// CRITICAL — the permission middleware uses this index in layer 3.
+// Check whether the recipient has an active delegation for this permission.
 delegationSchema.index({
   delegatee_id: 1,
   permissions:  1,
@@ -282,7 +280,7 @@ delegationSchema.index({
   is_deleted:   1,
 });
 
-// Delegator — "maine kya delegate kiya hai"
+// Delegator — permissions granted by this user
 delegationSchema.index({
   delegator_id: 1,
   status:       1,
@@ -296,7 +294,7 @@ delegationSchema.index({
   is_deleted:   1,
 });
 
-// Cron job — expire karo jo delegations end ho gayi hain
+// Scheduled job — expire delegations whose endDate has passed.
 delegationSchema.index({
   status:     1,
   endDate:    1,

@@ -6,6 +6,7 @@
 const Attendance = require("../modules/attendance/models/attendance.model");
 const Employee   = require("../modules/employee/models/employee.model");
 const CompanyConfig = require("../modules/companyConfig/models/companyConfig.model");
+const Holiday = require('../modules/holiday/models/holiday.models');
 const { getDayOfWeek, getTodayDateInOrgTimezone } = require('../utils/timezone');
 
 exports.runAutoAbsentMarker = async () => {
@@ -13,7 +14,7 @@ exports.runAutoAbsentMarker = async () => {
 
   // Group employees by company to handle timezone per company
   const employees = await Employee.find({ status: "ACTIVE", isDeleted: false })
-    .select("_id org_id company_id unit_id").lean();
+    .select("_id userId joiningDate org_id company_id unit_id").lean();
 
   let marked = 0;
   let skipped = 0;
@@ -46,8 +47,7 @@ exports.runAutoAbsentMarker = async () => {
       
       // Get target date in org timezone (yesterday)
       const todayInOrg = getTodayDateInOrgTimezone(timezone);
-      const targetDate = new Date(todayInOrg);
-      targetDate.setDate(targetDate.getDate() - 1);
+      const targetDate = require('moment-timezone')(todayInOrg).tz(timezone).subtract(1, 'day').startOf('day').toDate();
       
       console.log(`[AutoAbsent] Processing ${group.employees.length} employees for ${targetDate.toDateString()} in ${timezone}`);
       
@@ -64,6 +64,7 @@ exports.runAutoAbsentMarker = async () => {
       // Process each employee in this company
       for (const emp of group.employees) {
         try {
+          if (!emp.userId || (emp.joiningDate && emp.joiningDate > targetDate)) { skipped++; continue; }
           const existing = await Attendance.findOne({ 
             org_id: emp.org_id,
             company_id: emp.company_id,
@@ -75,6 +76,11 @@ exports.runAutoAbsentMarker = async () => {
             skipped++; 
             continue; 
           }
+
+          const holiday = await Holiday.findOne({ org_id: emp.org_id, company_id: emp.company_id,
+            $or: [{ unit_id: emp.unit_id }, { unit_id: null }],
+            date: { $gte: targetDate, $lt: todayInOrg }, isDeleted: false });
+          if (holiday) { skipped++; continue; }
 
           // Check approved leave
           const LeaveRequest = require("../modules/leave/models/leaveRequest.models");
@@ -93,6 +99,7 @@ exports.runAutoAbsentMarker = async () => {
             company_id:     emp.company_id,
             unit_id:        emp.unit_id,
             employeeId:     emp._id,
+            userId:         emp.userId,
             date:           targetDate,
             status:         onLeave ? "ON_LEAVE" : "ABSENT",
             leaveRequestId: onLeave?._id || null,

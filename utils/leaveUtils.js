@@ -171,7 +171,7 @@ const resolveL2Approver = async (company_id, unit_id) => {
   const User = require("../modules/auth/models/user.model");
   const Role = require("../modules/role/role.model");
 
-  // hr_manager role find karo — system role
+  // Find the hr_manager system role.
   const hrRole = await Role.findOne({
     slug:     "hr_manager",
     isSystem: true,
@@ -179,7 +179,7 @@ const resolveL2Approver = async (company_id, unit_id) => {
 
   if (!hrRole) return null;
 
-  // Unit level pe pehle dhundo — nahi mila to company level
+  // Search at the unit level first; fall back to the company level if not found.
   const filter = {
     roleId:    hrRole._id,
     company_id,

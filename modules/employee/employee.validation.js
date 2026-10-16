@@ -226,6 +226,7 @@ exports.updateEmployeeSchema = Joi.object({
   joiningDate:        Joi.date().optional(),
   confirmationDate:   Joi.date().optional(),
   status:             Joi.string().valid("ACTIVE", "INACTIVE", "ON_NOTICE", "TERMINATED", "ON_LEAVE").optional(),
+  confirmCompanyAdminDeactivation: Joi.boolean().strict(),
   exitDate:           Joi.date().optional(),
   exitReason:         Joi.string().optional(),
 

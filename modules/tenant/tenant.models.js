@@ -143,7 +143,7 @@ const tenantSchema = new mongoose.Schema({
     enum: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
     default: ["MON", "TUE", "WED", "THU", "FRI"]
   },
-  saturdayType: {           // ← workingHours ke ANDAR hai
+  saturdayType: {           // ← inside workingHours
     type: String,
     enum: ["NONE", "FULL", "ALTERNATE_ODD", "ALTERNATE_EVEN"],
     default: "NONE"

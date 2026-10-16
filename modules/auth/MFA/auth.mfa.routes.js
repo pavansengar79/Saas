@@ -3,11 +3,11 @@ const router        = express.Router();
 const mfaController = require("./auth.mfa.controller");
 const { authenticate } = require("../../../middlewares/auth.middleware"); // ✅
 
-// ─── Public route — login ke baad challenge (token nahi hota tab) ─────────────
-// userId + OTP submit — full JWT milta hai
+// ─── Public route — challenge after login (no token yet) ─────────────
+// Submit userId and OTP to receive a full JWT
 router.post("/challenge", mfaController.challenge);
 
-// ─── Protected routes — logged in user ke liye ───────────────────────────────
+// ─── Protected routes — for authenticated users ───────────────────────────────
 router.use(authenticate);
 
 router.get ("/status",                    mfaController.getStatus);

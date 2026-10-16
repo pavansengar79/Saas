@@ -26,10 +26,10 @@ function getAllowedIps() {
 
 // ─────────────────────────────────────────
 // Super Admin Guard
-// authenticate ke BAAD lagao
+// Apply after authentication
 // ─────────────────────────────────────────
 // Checks:
-//   1. role === "SUPER_ADMIN" (JWT se)
+//   1. role === "SUPER_ADMIN" (from JWT)
 // ─────────────────────────────────────────
 
 exports.superAdminGuard = (req, res, next) => {
@@ -39,8 +39,8 @@ exports.superAdminGuard = (req, res, next) => {
     return next(new AppError("Access restricted", 403));
   }
 
-  // ── 2. IP check — sirf production mein, aur sirf jab explicitly
-  //      configured ho. Vercel/serverless deployments have dynamic
+  // ── 2. IP check — only in production and when explicitly
+  //      configured. Vercel/serverless deployments have dynamic
   //      egress IPs, and admins often connect from non-static IPs too,
   //      so treating "not configured" as a hard block ends up locking
   //      out every super admin action (including just viewing a

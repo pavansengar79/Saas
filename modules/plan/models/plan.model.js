@@ -44,10 +44,10 @@ const planSchema = new mongoose.Schema(
     }],
 
     // ─── Feature Gates ────────────────────────────────────────
-    // Kaunse features is plan mein included hain
-    // Super Admin UI se manage karo — no code deploy needed
+    // Features included in this plan
+    // Manage through the Super Admin UI — no code deployment needed
     // e.g. ["shift_roster", "bulk_import_export", "leave_encashment"]
-    // checkFeature.middleware.js yahi check karta hai
+    // checkFeature.middleware.js checks these features
     features: {
       type:    [String],
       default: [],

@@ -7,16 +7,16 @@
 //   > unit_admin > hr_manager > manager > employee
 //
 // Usage:
-//   checkRole("org_admin")              → org_admin + upar wale allowed
+//   checkRole("org_admin")              → org_admin and higher roles allowed
 //   checkRole("hr_manager", "manager")  → exact match (+ SUPER_ADMIN)
-//   checkRole("employee")               → sab logged-in users
+//   checkRole("employee")               → all logged-in users
 //
 // Note: Permission-based checks use permission.middleware.js
 //       checkRole is for role-level access only
 
 const AppError = require("../utils/appError");
 
-// Role hierarchy — number jitna bada, utni zyada power
+// Role hierarchy — higher numbers grant greater access
 const ROLE_HIERARCHY = {
   SUPER_ADMIN:        100,
   org_admin:           90,
@@ -31,9 +31,9 @@ const ROLE_HIERARCHY = {
 // ─────────────────────────────────────────────────────────────
 // checkRole(...allowedRoles)
 //
-// Ek role diya  → hierarchy mode: us role + upar wale allowed
-// Do+ roles diye → exact match mode: sirf wahi roles allowed
-//                  (SUPER_ADMIN hamesha allowed)
+// One role given  → hierarchy mode: that role and higher roles allowed
+// Multiple roles → exact match mode: only the specified roles allowed
+//                  (SUPER_ADMIN is always allowed)
 // ─────────────────────────────────────────────────────────────
 exports.checkRole = (...allowedRoles) => {
   return (req, res, next) => {
@@ -43,7 +43,7 @@ exports.checkRole = (...allowedRoles) => {
       return next(new AppError("Authentication required", 401));
     }
 
-    // SUPER_ADMIN — har jagah allowed
+    // SUPER_ADMIN — allowed everywhere
     if (userRole === "SUPER_ADMIN") return next();
     
     console.log(`[ROLE CHECK] Required: [${allowedRoles.join(', ')}], User role: ${userRole}, Match: ${allowedRoles.includes(userRole)}`);
@@ -51,7 +51,7 @@ exports.checkRole = (...allowedRoles) => {
     // Exact role match (including array of roles)
     if (allowedRoles.includes(userRole)) return next();
 
-    // Hierarchy check — sirf tab jab ek hi role specify kiya ho
+    // Hierarchy check — only when a single role is specified
     if (allowedRoles.length === 1) {
       const requiredLevel = ROLE_HIERARCHY[allowedRoles[0]];
       const userLevel     = ROLE_HIERARCHY[userRole];
@@ -71,7 +71,7 @@ exports.checkRole = (...allowedRoles) => {
 
 // ─────────────────────────────────────────────────────────────
 // requireSuperAdmin
-// Sirf SUPER_ADMIN allowed
+// Only SUPER_ADMIN allowed
 // ─────────────────────────────────────────────────────────────
 exports.requireSuperAdmin = (req, res, next) => {
   if (req.user?.role !== "SUPER_ADMIN") {
@@ -98,7 +98,7 @@ exports.requireTenantUser = (req, res, next) => {
 
 // ─────────────────────────────────────────────────────────────
 // requireOrgAdmin
-// Sirf org_admin allowed (+ SUPER_ADMIN)
+// Only org_admin allowed (+ SUPER_ADMIN)
 // ─────────────────────────────────────────────────────────────
 exports.requireOrgAdmin = (req, res, next) => {
   const userRole = req.user?.role;

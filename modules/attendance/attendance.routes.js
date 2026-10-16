@@ -17,7 +17,7 @@ const checkPermission                  = require("../../middlewares/permission.m
 const checkTrial                       = require("../../middlewares/checkTrial.middleware");
 const validate                         = require("../../middlewares/validate.middleware");
 
-// ── Global guards — sab routes pe ────────────────────────────
+// ── Global guards — on all routes ────────────────────────────
 router.use(authenticate);
 router.use(requireTenantUser);
 router.use(checkTrial);
@@ -51,7 +51,7 @@ router.put(
   companyConfigController.updateConfig
 );
 
-// GET /hrms/me/attendance/today — aaj ka punch status (attendance.read permission)
+// GET /hrms/me/attendance/today — today's punch status (attendance.read permission)
 router.get(
   "/me/today",
   checkPermission("attendance.read"),

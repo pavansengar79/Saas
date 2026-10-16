@@ -3,13 +3,13 @@
 // Shift CRUD — Create, Read, Update, Delete + activate/deactivate
 //
 // Dynamic design:
-//   - isDefault enforcement: sirf ek shift per unit default ho sakti hai
-//     create/update dono pe check hota hai
-//   - Scope: har query mein org_id + company_id + unit_id mandatory
-//   - Delete block: agar kisi employee ka active roster is shift pe hai
-//     toh delete nahi hoga
-//   - HR Manager create kar sakta hai, Unit Admin activate/deactivate
-//   - All times stored as "HH:MM" string — timezone handling frontend pe
+//   - isDefault enforcement: only one shift per unit can be the default
+//     Checked on both create and update
+//   - Scope: org_id + company_id + unit_id are required in every query
+//   - Delete block: a shift cannot be deleted if an employee has an active
+//     roster assigned to it
+//   - HR Manager can create shifts; Unit Admin can activate/deactivate them
+//   - All times are stored as "HH:MM" strings — timezone handling is on the frontend
 
 "use strict";
 
@@ -21,7 +21,7 @@ const mongoose = require("mongoose");
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
 // ─── Helper: build scope filter ──────────────────────────────
-// Har query mein yeh filter mandatory — cross-unit data leak nahi hoga
+// This filter is required in every query to prevent cross-unit data leaks
 const buildScope = (user, query = {}) => {
   const requestedOrgId = query.orgId;
   const requestedCompanyId = query.companyId;
@@ -57,7 +57,7 @@ const buildScope = (user, query = {}) => {
 const isValidTime = (t) => /^\d{2}:\d{2}$/.test(t);
 
 // ─── Helper: check overlapping default ───────────────────────
-// Ek unit mein sirf ek isDefault:true shift allowed
+// Only one isDefault:true shift is allowed per unit
 const enforceDefaultUniqueness = async (unit_id, org_id, company_id, excludeId = null) => {
   const query = {
     unit_id:    toObjId(unit_id),
@@ -96,7 +96,7 @@ exports.createShift = async (payload, user) => {
     unit_id,
   } = payload;
 
-  // unit_id — payload se ya user context se
+  // unit_id — from the payload or the user context
   const targetUnitId = unit_id || user.unitId;
   if (!targetUnitId) throw new AppError("unit_id is required", 400);
 
@@ -176,7 +176,7 @@ exports.getAllShifts = async (query, user) => {
   const skip  = (Number(page) - 1) * Number(limit);
   const total = await Shift.countDocuments(filter);
   const shifts = await Shift.find(filter)
-    .sort({ isDefault: -1, createdAt: -1 }) // default shift pehle
+    .sort({ isDefault: -1, createdAt: -1 }) // default shift first
     .skip(skip)
     .limit(Number(limit))
     .populate("createdBy", "name email")
@@ -313,7 +313,7 @@ exports.deactivateShift = async (id, user) => {
   if (!shift) throw new AppError("Shift not found", 404);
   if (shift.status === "INACTIVE") throw new AppError("Shift is already inactive", 400);
 
-  // Default shift deactivate nahi ho sakti — pehle kisi aur ko default banao
+  // The default shift cannot be deactivated — assign another shift as default first
   if (shift.isDefault) {
     throw new AppError(
       "Cannot deactivate the default shift. Please assign another shift as default first.",
@@ -321,7 +321,7 @@ exports.deactivateShift = async (id, user) => {
     );
   }
 
-  // Active rosters check — kisi employee ka roster iss shift pe hai?
+  // Check whether any employee has an active roster on this shift
   const activeRosterCount = await Roster.countDocuments({
     shift_id:   toObjId(id),
     status:     "ACTIVE",
@@ -353,7 +353,7 @@ exports.deleteShift = async (id, user) => {
   });
   if (!shift) throw new AppError("Shift not found", 404);
 
-  // Default shift delete nahi ho sakti
+  // The default shift cannot be deleted
   if (shift.isDefault) {
     throw new AppError(
       "Cannot delete the default shift. Please assign another shift as default first.",
@@ -377,7 +377,7 @@ exports.deleteShift = async (id, user) => {
   }
 
   shift.is_deleted = true;
-  shift.isDefault  = false; // default flag bhi clear karo
+  shift.isDefault  = false; // clear the default flag as well
   shift.updatedBy  = user.userId;
   await shift.save();
 
@@ -385,7 +385,7 @@ exports.deleteShift = async (id, user) => {
 };
 
 // ─── GET DEFAULT SHIFT FOR UNIT ──────────────────────────────
-// attendance.service.js use karega yeh function
+// attendance.service.js uses this function
 // Returns the default shift for a unit, or null if none set
 exports.getDefaultShift = async (unit_id, org_id, company_id) => {
   return await Shift.findOne({
@@ -400,8 +400,8 @@ exports.getDefaultShift = async (unit_id, org_id, company_id) => {
 
 // ─── RESOLVE SHIFT FOR EMPLOYEE (used by attendance.service.js) ──
 // Priority:
-//   1. Employee ka active roster for today → us shift ka data
-//   2. Unit ka isDefault:true ACTIVE shift
+//   1. Employee's active roster for today → its shift data
+//   2. Unit's isDefault:true ACTIVE shift
 //   3. null → AttendancePolicy fallback (caller handles)
 exports.resolveShiftForEmployee = async (employeeId, unitId, orgId, companyId, date = new Date()) => {
   const today = new Date(date);

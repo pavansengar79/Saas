@@ -81,7 +81,8 @@ exports.deleteEmployee = async (req, res, next) => {
 
     const result = await employeeService.deleteEmployee(
       req.params.id,
-      req.user
+      req.user,
+      req.body?.confirmCompanyAdminDeactivation
     );
 
     return res.status(200).json({
@@ -119,7 +120,7 @@ exports.uploadDocument = async (req, res, next) => {
     const document = await employeeService.uploadDocument(
       req.params.id,
       req.body,
-      req.file,    // ✅ multer se file
+      req.file,    // File provided by Multer
       req.user
     );
 
@@ -185,7 +186,7 @@ exports.verifyDocument = async (req, res, next) => {
   }
 };
 
-// employee.controller.js mein add karo
+// Employee status change handler
 
 exports.changeStatus = async (req, res, next) => {
   try {

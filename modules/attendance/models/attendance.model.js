@@ -1,24 +1,24 @@
 // modules/attendance/models/attendance.model.js
 //
-// Attendance record — ek employee ka ek din ka record.
+// Attendance record — one record per employee per day.
 //
 // Punch flow:
-//   Employee punch-in karta hai  → checkIn set, status = PRESENT
-//   Employee punch-out karta hai → checkOut set, workingHours calculated
+//   Employee punches in  → checkIn set, status = PRESENT
+//   Employee punches out → checkOut set, workingHours calculated
 //
 // Status values:
-//   PRESENT        → Aaya aur punch-in/out kiya
-//   ABSENT         → Koi record nahi / HR ne manually mark kiya
-//   HALF_DAY       → Sirf ek half attend kiya
-//   ON_LEAVE       → Approved leave hai us din
-//   HOLIDAY        → Company/national holiday tha
-//   WEEKEND        → Saturday/Sunday (ya tenant ka off day)
-//   LATE           → Punch-in late tha (grace period ke baad)
+//   PRESENT        → Attended and punched in/out
+//   ABSENT         → No record / HR manually marked absent
+//   HALF_DAY       → Attended only half the day
+//   ON_LEAVE       → Approved leave for that day
+//   HOLIDAY        → Company/national holiday
+//   WEEKEND        → Saturday/Sunday (or tenant's day off)
+//   LATE           → Punched in late (after the grace period)
 //   WFH            → Work from home
 //
 // workingHours:
 //   checkOut - checkIn in decimal hours (e.g. 8.5 = 8 hrs 30 min)
-//   Null agar abhi punch-out nahi hua
+//   Null if the employee has not punched out yet
 //
 // overtimeHours:
 //   workingHours - standardHours (only if positive)
@@ -99,6 +99,10 @@ const attendanceSchema = new Schema(
       type: Date,
       default: null,
     },
+
+    // Daily record stays unique; each pair records an actual work interval.
+    // Legacy records without sessions are interpreted as one interval.
+    sessions: [{ checkIn: { type: Date, required: true }, checkOut: { type: Date, default: null } }],
 
     // ─── Calculated Fields ────────────────────────────────────────
     // Decimal hours — calculated on punch-out
@@ -188,16 +192,16 @@ const attendanceSchema = new Schema(
     },
 
     // ─── Notes / Remarks ─────────────────────────────────────────
-    // HR ya system se note (e.g. "Regularized by HR", "Server downtime")
+    // Note from HR or the system (e.g. "Regularized by HR", "Server downtime")
     remarks: {
       type: String,
       trim: true,
-      maxlength: [500, "Remarks 500 characters se zyada nahi ho sakte"],
+      maxlength: [500, "Remarks cannot exceed 500 characters."],
       default: null,
     },
 
     // ─── HR Regularization ────────────────────────────────────────
-    // HR ne manually change kiya? (audit trail)
+    // Did HR make a manual change? (audit trail)
     isRegularized: {
       type: Boolean,
       default: false,
@@ -327,7 +331,7 @@ const attendanceSchema = new Schema(
 
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 
-// Primary lookup: tenant + employee + date (unique — ek din ka ek hi record)
+// Primary lookup: tenant + employee + date (unique — one record per day)
 attendanceSchema.index(
   { org_id: 1, company_id: 1, unit_id: 1, employeeId: 1, date: 1 },
   { unique: true }
@@ -379,7 +383,7 @@ attendanceSchema.pre("save", async function () {
     // In particular, an explicit zero can mean OT is disabled or below threshold.
   }
 
-  // Date ko midnight pe normalize karo (service layer should use org timezone midnight)
+  // Normalize the date to midnight (service layer should use org timezone midnight)
   // This is UTC midnight - service layer handles timezone conversion
 //   if (this.date) {
 //     const d = new Date(this.date);

@@ -1,21 +1,21 @@
 // middlewares/requestLogger.middleware.js
 // 
-// Har request pe log karta hai:
+// Logs every request:
 //   → Method, URL, Status, Response Time
 //   → User info (userId, role, level)
-//   → Query params + Request body (passwords hide karta hai)
+//   → Query params + Request body (with passwords masked)
 //   → Error responses
 //
 // Usage in app.js:
 //   const requestLogger = require('./middlewares/requestLogger.middleware')
 //   app.use(requestLogger)
-//   // routes ke PEHLE add karo
+//   // Add before routes
 
 "use strict";
 
 const SENSITIVE_FIELDS = ["password", "newPassword", "confirmPassword", "token", "mfaSecret"];
 
-// Sensitive fields ko mask karo
+// Mask sensitive fields
 const maskBody = (body) => {
   if (!body || typeof body !== "object") return body;
   const masked = { ...body };
@@ -60,7 +60,7 @@ const methodColor = (method) => {
 module.exports = (req, res, next) => {
   const start = Date.now();
 
-  // Response finish hone pe log karo
+  // Log when the response finishes
   res.on("finish", () => {
     const duration  = Date.now() - start;
     const status    = res.statusCode;
@@ -68,7 +68,7 @@ module.exports = (req, res, next) => {
     const url       = req.originalUrl || req.url;
     const timestamp = new Date().toISOString();
 
-    // User info from JWT (auth middleware ke baad set hota hai)
+    // User info from JWT (set after authentication middleware runs)
     const user      = req.user;
     const userId    = user?.userId    || "—";
     const role      = user?.role      || "—";

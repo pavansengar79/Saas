@@ -72,11 +72,11 @@ const companyConfigSchema = new mongoose.Schema(
     microsoftOAuthEnabled: { type: Boolean, default: false },
     regularisationWindowDays: { type: Number, default: 30, min: 1, max: 90 },
 
-// NAYA — Flexible approval flow
+// NEW — Flexible approval flow
 regularisationApprovalFlow: {
   type:    String,
   enum:    ["L1_ONLY", "L2_ONLY", "L1_L2", "AUTO"],
-  default: "L2_ONLY",  // PM ka default — seedha HR
+  default: "L2_ONLY",  // PM default — directly to HR
 },
 
     // T-08 — SMTP configuration (per-company outgoing mail)

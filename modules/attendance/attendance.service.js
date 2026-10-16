@@ -7,6 +7,9 @@ const CompanyConfig = require("../companyConfig/models/companyConfig.model");
 const { resolveAttendancePolicy } = require("../../utils/policyResolver");
 const regularisationPolicyService = require("./regularisationPolicy.service");
 const { calculatePolicyOvertime } = require("./overtimeCalculator");
+const { creditedOvertime } = require('./creditedOvertime');
+const { correctAttendanceTimes } = require('./correctedAttendance');
+const { monthRange, attendanceFlags, summarizeAttendance, sessionHours } = require('./attendanceMetrics');
 const Holiday      = require("../holiday/models/holiday.models");     // T-19
 const LeaveRequest = require("../leave/models/leaveRequest.models");  // T-20
 
@@ -18,6 +21,7 @@ const { resolveShiftForEmployee } = require("../shift/shift.service");
 const {
   nowInTimezone,
   getTodayDateInOrgTimezone,
+  getMidnightInTimezone,
   validateShiftWindowTimezone,
   calculateWorkingHours,
   calculateOvertime,
@@ -36,10 +40,9 @@ const {
  * "YYYY-MM" string → { start: Date, end: Date } for the full month
  * Both dates are UTC midnight.
  */
-const parseMonth = (monthStr) => {
+const parseMonth = (monthStr, timezone = 'Asia/Kolkata') => {
   const [year, month] = monthStr.split("-").map(Number);
-  const start = new Date(Date.UTC(year, month - 1, 1));       // 1st of month
-  const end   = new Date(Date.UTC(year, month, 1));            // 1st of next month
+  const { start, end } = monthRange(monthStr, timezone);
   return { start, end, year, month };
 };
 
@@ -371,7 +374,7 @@ exports.punchIn = async (data, user, req = null) => {
   // ── 1. Get employee ──────────────────────────────────────────
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId)
 
-  // ── 2. Today ki date (org timezone midnight) ──────────────────
+  // ── 2. Today's date (org timezone midnight) ──────────────────
   const today = getTodayDateInOrgTimezone(timezone);
 
   // ── 3. Fetch Unit with geolocation settings ─────────────────────────────
@@ -436,12 +439,7 @@ exports.punchIn = async (data, user, req = null) => {
 
   if (existing) {
     if (existing.checkIn) {
-      throw new AppError(
-        existing.checkOut
-          ? "Aap aaj ke liye already punch-in aur punch-out kar chuke hain"
-          : "Aap aaj already punch-in kar chuke hain. Pehle punch-out karein",
-        409
-      );
+      if (!existing.checkOut) throw new AppError('You have already punched in today. Please punch out before punching in again.', 409);
     }
   }
 
@@ -455,7 +453,7 @@ exports.punchIn = async (data, user, req = null) => {
   // ── 5. Employee active check ──────────────────────────────────
   if (employee.status !== "ACTIVE") {
     throw new AppError(
-      `Inactive employee punch-in nahi kar sakta (status: ${employee.status})`,
+      `Inactive employees cannot punch in (status: ${employee.status}).`,
       403
     );
   }
@@ -481,8 +479,8 @@ exports.punchIn = async (data, user, req = null) => {
   // ── 6. Resolve shift dynamically ─────────────────────────────
   //
   // Priority chain (fully dynamic — nothing hardcoded):
-  //   1. Employee ka active roster for today → use roster's shift values
-  //   2. Unit ka isDefault:true ACTIVE shift → use default shift values
+  //   1. Employee's active roster for today → use roster's shift values
+  //   2. Unit's isDefault:true ACTIVE shift → use default shift values
   //   3. AttendancePolicy fallback → use policy's shift config
   //   4. Last resort defaults → "09:00", 15 min grace, 8 hrs
   //
@@ -583,11 +581,25 @@ exports.punchIn = async (data, user, req = null) => {
   const isLate = punchInStatus === 'LATE';
   const lateMinutes = isLate ? Math.ceil((nowOrgTime - windowValidation.shiftStart) / (1000 * 60)) : 0;
 
+  if (existing?.checkIn && existing.checkOut) {
+    // Compare-and-swap prevents simultaneous re-entry requests from opening two sessions.
+    const priorSessions = existing.sessions?.length
+      ? existing.sessions.map(s => ({ checkIn: s.checkIn, checkOut: s.checkOut }))
+      : [{ checkIn: existing.checkIn, checkOut: existing.checkOut }];
+    const resumed = await Attendance.findOneAndUpdate({ _id: existing._id, checkOut: existing.checkOut }, {
+      $set: { checkOut: null, finalized: false, updatedBy: user.userId,
+        isLate: existing.isLate || isLate, isWFH: existing.isWFH || isWFH },
+      $push: { sessions: { $each: [...(existing.sessions?.length ? [] : priorSessions), { checkIn: now }] } },
+    }, { new: true });
+    if (!resumed) throw new AppError('Attendance was changed; refresh and retry.', 409);
+    return resumed;
+  }
+
   // ── 7. Determine initial status (T-19 + T-20) ────────────────
   // IMPORTANT: If employee punches in, status reflects attendance, NOT holiday
   // Holiday status is only for auto-generated records when no one punches in
   let status = "PRESENT";
-  if (approvedLeave)  status = "ON_LEAVE";       // T-20
+  // Punches always indicate attendance, even when leave was approved earlier.
   if (isWFH)          status = "WFH";
   if (isLate)         status = "LATE";
 
@@ -623,6 +635,7 @@ exports.punchIn = async (data, user, req = null) => {
       },
       $set: {
         checkIn:     now,
+        sessions:    [{ checkIn: now }],
         status,
         isLate,
         lateMinutes,
@@ -675,7 +688,7 @@ exports.punchOut = async (data, user) => {
     user.unitId ? user.unitId.toString() : null
   );
 
-  // ── 2. Today ka record dhundo (org timezone midnight) ─────────
+  // ── 2. Find today's record (org timezone midnight) ─────────
   const today = getTodayDateInOrgTimezone(timezone);
 
   const record = await Attendance.findOne({
@@ -688,12 +701,12 @@ exports.punchOut = async (data, user) => {
 
   // ── 3. Edge cases ─────────────────────────────────────────────
   if (!record || !record.checkIn) {
-    throw new AppError("Pehle punch-in karein", 400);
+    throw new AppError("Please punch in first.", 400);
   }
 
   if (record.checkOut) {
     throw new AppError(
-      "Aap aaj already punch-out kar chuke hain",
+      "You have already punched out today.",
       409
     );
   }
@@ -701,35 +714,27 @@ exports.punchOut = async (data, user) => {
   // ── 4. checkOut can't be before checkIn ──────────────────────
   if (now < record.checkIn) {
     throw new AppError(
-      "Punch-out time punch-in se pehle nahi ho sakta",
+      "Punch-out time cannot be earlier than punch-in time.",
       400
     );
   }
 
   // ── 5. Minimum working time check (5 minutes) ────────────────
-  const diffMinutes = (now - record.checkIn) / (1000 * 60);
+  const lastSession = record.sessions?.length ? record.sessions[record.sessions.length - 1] : null;
+  const diffMinutes = (now - (lastSession?.checkIn || record.checkIn)) / (1000 * 60);
   if (diffMinutes < 5) {
     throw new AppError(
-      "Punch-in ke 5 minute baad hi punch-out kar sakte hain",
+      "You can punch out at least 5 minutes after punching in.",
       400
     );
   }
 
   // ── 6. workingHours & overtimeHours (timezone-aware) ─────────
   // Calculate using timezone-aware utility
-  const workingHours = calculateWorkingHours(record.checkIn, now, timezone);
-  const detectedOvertimeHours = calculateOvertime(
-    now,
-    record.shiftEnd,
-    record.isNextDay,
-    record.date,
-    timezone,
-    0
-  );
-  const overtimeHours = calculatePolicyOvertime(
-    detectedOvertimeHours,
-    attendancePolicy.overtime
-  );
+  if (!record.sessions?.length) record.sessions = [{ checkIn: record.checkIn }];
+  record.sessions[record.sessions.length - 1].checkOut = now;
+  const workingHours = sessionHours(record.sessions);
+  const overtimeHours = creditedOvertime(record, now, workingHours, timezone, companyConfig, attendancePolicy);
   
   record.checkOut  = now;
   record.workingHours = workingHours;
@@ -746,18 +751,11 @@ exports.punchOut = async (data, user) => {
     const halfDayMin = record.halfDayThreshold  || 4;
     const fullDayMin = record.standardHours     || 8;
 
-    // Only auto-update if currently PRESENT, WFH, or LATE
-    const autoStatuses = ["PRESENT", "WFH", "LATE"];
+    // A second interval can turn an earlier half-day into a full day.
+    const autoStatuses = ["PRESENT", "WFH", "LATE", "HALF_DAY"];
     if (autoStatuses.includes(record.status)) {
-      if (workingHours < halfDayMin) {
-        // Worked less than halfDay threshold
-        // If was LATE → keep LATE (still attended, just short)
-        // PRESENT/WFH → mark HALF_DAY
-        if (record.status !== "LATE") record.status = "HALF_DAY";
-      } else if (workingHours >= halfDayMin && workingHours < fullDayMin) {
-        record.status = "HALF_DAY";
-      }
-      // >= fullDayMin → status stays (PRESENT / WFH / LATE)
+      record.status = workingHours < fullDayMin ? 'HALF_DAY'
+        : record.isLate ? 'LATE' : record.isWFH ? 'WFH' : 'PRESENT';
     }
   } catch (e) {
     // Non-fatal — status stays as-is
@@ -777,7 +775,8 @@ exports.punchOut = async (data, user) => {
 
 exports.getMyAttendance = async (query, user) => {
   const { month } = query;
-  const { start, end, year, month: monthNum } = parseMonth(month);
+  const config = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
+  const { start, end, year, month: monthNum } = parseMonth(month, config?.timezone);
 
   // ── 1. Get employee ──────────────────────────────────────────
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
@@ -788,6 +787,7 @@ exports.getMyAttendance = async (query, user) => {
     company_id: user.companyId,
     employeeId: employee._id,
     date:       { $gte: start, $lt: end },
+    isDeleted: false,
   })
     .sort({ date: 1 })
     .select("-__v -isDeleted");
@@ -812,16 +812,12 @@ exports.getMyAttendance = async (query, user) => {
   summary.totalDays = daysInMonth;
 
   records.forEach((r) => {
-    switch (r.status) {
-      case "PRESENT":  summary.present++;  break;
-      case "ABSENT":   summary.absent++;   break;
-      case "LATE":     summary.late++;     summary.present++; break; // LATE = attended
-      case "HALF_DAY": summary.halfDay++;  break;
-      case "ON_LEAVE": summary.onLeave++;  break;
-      case "HOLIDAY":  summary.holiday++;  break;
-      case "WEEKEND":  summary.weekend++;  break;
-      case "WFH":      summary.wfh++;      summary.present++; break;
+    const flags = attendanceFlags(r);
+    for (const key of ['present', 'absent', 'late', 'halfDay', 'onLeave', 'wfh']) {
+      if (flags[key]) summary[key]++;
     }
+    if (r.status === 'HOLIDAY') summary.holiday++;
+    if (r.status === 'WEEKEND') summary.weekend++;
     if (r.workingHours)  summary.totalWorkingHours  += r.workingHours;
     if (r.overtimeHours) summary.totalOvertimeHours += r.overtimeHours;
   });
@@ -890,7 +886,8 @@ exports.getTodayStatus = async (user) => {
 
 exports.getMySummary = async (query, user) => {
   const { month } = query;
-  const { start, end, year, month: monthNum } = parseMonth(month);
+  const config = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
+  const { start, end, year, month: monthNum } = parseMonth(month, config?.timezone);
 
   const employee = await getEmployee(user.userId, user.orgId, user.companyId, user.unitId);
 
@@ -900,6 +897,7 @@ exports.getMySummary = async (query, user) => {
       $match: {
         org_id:     employee.org_id,
         company_id: employee.company_id,
+        unit_id: employee.unit_id,
         employeeId: employee._id,
         date:       { $gte: start, $lt: end },
         isDeleted:  false,
@@ -909,14 +907,14 @@ exports.getMySummary = async (query, user) => {
       $group: {
         _id:                null,
         totalRecords:       { $sum: 1 },
-        present:            { $sum: { $cond: [{ $in: ["$status", ["PRESENT", "WFH", "LATE"]] }, 1, 0] } },
+        present:            { $sum: { $cond: [{ $or: [{ $ne: ['$checkIn', null] }, { $in: ["$status", ["PRESENT", "WFH", "LATE", "HALF_DAY"]] }] }, 1, 0] } },
         absent:             { $sum: { $cond: [{ $eq: ["$status", "ABSENT"] }, 1, 0] } },
-        late:               { $sum: { $cond: [{ $eq: ["$status", "LATE"] }, 1, 0] } },
+        late:               { $sum: { $cond: [{ $or: [{ $eq: ['$isLate', true] }, { $eq: ["$status", "LATE"] }] }, 1, 0] } },
         halfDay:            { $sum: { $cond: [{ $eq: ["$status", "HALF_DAY"] }, 1, 0] } },
         onLeave:            { $sum: { $cond: [{ $eq: ["$status", "ON_LEAVE"] }, 1, 0] } },
         holiday:            { $sum: { $cond: [{ $eq: ["$status", "HOLIDAY"] }, 1, 0] } },
         weekend:            { $sum: { $cond: [{ $eq: ["$status", "WEEKEND"] }, 1, 0] } },
-        wfh:                { $sum: { $cond: [{ $eq: ["$status", "WFH"] }, 1, 0] } },
+        wfh:                { $sum: { $cond: [{ $or: [{ $eq: ['$isWFH', true] }, { $eq: ["$status", "WFH"] }] }, 1, 0] } },
         totalWorkingHours:  { $sum: { $ifNull: ["$workingHours",  0] } },
         totalOvertimeHours: { $sum: { $ifNull: ["$overtimeHours", 0] } },
         totalLateMinutes:   { $sum: { $ifNull: ["$lateMinutes",   0] } },
@@ -1075,20 +1073,19 @@ exports.getAllAttendance = async (query, user) => {
 
   // Date range handling
   const moment = require("moment-timezone");
-  const ORG_TZ = "Asia/Kolkata"; // TODO: pull from company config if per-org timezone varies
+  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId }).select('timezone').lean();
+  const ORG_TZ = companyConfig?.timezone || 'Asia/Kolkata';
 
   if (startDate && endDate) {
     const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
     const end   = moment.tz(`${endDate} 23:59:59.999`, ORG_TZ).utc().toDate();
     filter.date = { $gte: start, $lte: end };
   } else if (month) {
-    const { start, end } = parseMonth(month);
+    const { start, end } = parseMonth(month, ORG_TZ);
     filter.date = { $gte: start, $lt: end };
   } else {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    filter.date = { $gte: start, $lte: end };
+    const { start, end } = parseMonth(moment().tz(ORG_TZ).format('YYYY-MM'), ORG_TZ);
+    filter.date = { $gte: start, $lt: end };
   }
 
   // Employee-specific filters
@@ -1275,24 +1272,24 @@ exports.getTeamAttendance = async (query, user) => {
 
   // Date range handling
   const moment = require("moment-timezone");
-  const ORG_TZ = "Asia/Kolkata";
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
+  const ORG_TZ = companyConfig?.timezone || 'Asia/Kolkata';
 
   if (startDate && endDate) {
     const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
     const end   = moment.tz(`${endDate} 23:59:59.999`, ORG_TZ).utc().toDate();
     filter.date = { $gte: start, $lte: end };
   } else if (month) {
-    const { start, end } = parseMonth(month);
+    const { start, end } = parseMonth(month, ORG_TZ);
     filter.date = { $gte: start, $lt: end };
   } else {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
-    filter.date = { $gte: start, $lte: end };
+    const { start, end } = parseMonth(moment().tz(ORG_TZ).format('YYYY-MM'), ORG_TZ);
+    filter.date = { $gte: start, $lt: end };
   }
 
   // Employee filter (higher priority than team filter)
   if (employeeId) {
+    if (!teamIds.some(id => String(id) === String(employeeId))) throw new AppError('Employee is not in your team', 403);
     filter.employeeId = employeeId;
   } else {
     // Default: show all team members
@@ -1416,15 +1413,7 @@ exports.getTeamAttendance = async (query, user) => {
   const allRecords = [...dbRecords, ...synthetic]
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-  const summary = {
-    total:   allRecords.length,
-    present: allRecords.filter(r => ["PRESENT", "LATE", "WFH"].includes(r.status)).length,
-    absent:  allRecords.filter(r => r.status === "ABSENT").length,
-    late:    allRecords.filter(r => r.status === "LATE").length,
-    wfh:     allRecords.filter(r => r.status === "WFH").length,
-    halfDay: allRecords.filter(r => r.status === "HALF_DAY").length,
-    onLeave: allRecords.filter(r => r.status === "ON_LEAVE").length,
-  };
+  const summary = { total: allRecords.length, ...summarizeAttendance(allRecords) };
 
   const filtered = status ? allRecords.filter(r => r.status === status) : allRecords;
   const skip = (Number(page) - 1) * Number(limit);
@@ -1468,7 +1457,7 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
   if (!orgId) throw new AppError("orgId is required", 400);
   if (!companyId) throw new AppError("companyId is required", 400);
 
-  // ── 1. Record dhundo — same tenant mein ──────────────────────
+  // ── 1. Find the record within the same tenant ──────────────────────
   const record = await Attendance.findOne({
     _id:        attendanceId,
     org_id:     orgId,
@@ -1518,7 +1507,7 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
   const newCheckOut = checkOut ? new Date(checkOut) : record.checkOut;
 
   if (newCheckIn && newCheckOut && newCheckOut < newCheckIn) {
-    throw new AppError("Check-out time, check-in se pehle nahi ho sakta", 400);
+    throw new AppError("Check-out time cannot be earlier than check-in time.", 400);
   }
 
   // ── 3. Apply changes ──────────────────────────────────────────
@@ -1529,10 +1518,17 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
   record.regularizedAt   = new Date();
   record.updatedBy       = user.userId;
 
-  if (checkIn)  record.checkIn  = new Date(checkIn);
-  if (checkOut) record.checkOut = new Date(checkOut);
+  if (checkIn || checkOut) {
+    const config = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
+      .select('timezone overtimeEnabled overtimeThresholdHours').lean();
+    const policyForHours = await resolveAttendancePolicy(
+      String(record.employeeId), String(companyId), record.unit_id ? String(record.unit_id) : null
+    );
+    correctAttendanceTimes(record, checkIn, checkOut, config?.timezone || 'Asia/Kolkata',
+      config, policyForHours);
+  }
 
-  await record.save(); // pre-save recalculates workingHours
+  await record.save();
   await record.populate("employeeId", "name employeeId email departmentId profilePhoto");
 
   return record;
@@ -1629,12 +1625,7 @@ exports.adminPunchIn = async (data, user) => {
   const unit = employee.unit_id
   
   // ── 2. Get date based on punch time (org timezone midnight) ────
-  // Get the date in org timezone
-  const orgPunchTime = new Date(punchDate.toLocaleString('en-US', { timeZone: timezone }))
-  // Create date at UTC midnight on the org date
-  // This ensures all attendance for the same org day have identical dates for querying
-  const today = new Date(orgPunchTime)
-  today.setUTCHours(0, 0, 0, 0)
+  const today = getMidnightInTimezone(punchDate, timezone)
   
   // ── 3. Use unit location for biometric punches ──────────────────
   let capturedLocation = null
@@ -1762,7 +1753,6 @@ exports.adminPunchIn = async (data, user) => {
   // IMPORTANT: If employee punches in, status reflects attendance, NOT holiday
   // Holiday status is only for auto-generated records when no one punches in
   let status = 'PRESENT'
-  if (approvedLeave) status = 'ON_LEAVE'
   if (isLate) status = 'LATE'
   
   // ── 10. Create attendance record ─────────────────────────────
@@ -1796,6 +1786,7 @@ exports.adminPunchIn = async (data, user) => {
       },
       $set: {
         checkIn: punchDate,
+        sessions: [{ checkIn: punchDate }],
         status,
         isLate,
         lateMinutes,
@@ -1893,20 +1884,13 @@ exports.adminPunchOut = async (data, user) => {
   }
   
   // ── 6. Calculate working hours ───────────────────────────────
-  const workingHours = calculateWorkingHours(record.checkIn, punchDate, timezone)
-  
-  const detectedOvertimeHours = calculateOvertime(
-    punchDate,
-    record.shiftEnd,
-    record.isNextDay,
-    record.date,
-    timezone,
-    0
-  )
-  const overtimeHours = calculatePolicyOvertime(
-    detectedOvertimeHours,
-    attendancePolicy.overtime
-  )
+  if (!record.sessions?.length) record.sessions = [{ checkIn: record.checkIn }]
+  record.sessions[record.sessions.length - 1].checkOut = punchDate
+  const workingHours = sessionHours(record.sessions)
+
+  const attendancePolicy = await resolveAttendancePolicy(employee._id.toString(),
+    user.companyId.toString(), unitId ? unitId.toString() : null)
+  const overtimeHours = creditedOvertime(record, punchDate, workingHours, timezone, companyConfig, attendancePolicy)
   
   // ── 7. Use unit location ─────────────────────────────────────
   let capturedLocation = null
@@ -1933,9 +1917,7 @@ exports.adminPunchOut = async (data, user) => {
   const fullDayMin = record.standardHours || 8
   
   if (['PRESENT', 'WFH', 'LATE'].includes(record.status)) {
-    if (workingHours < halfDayMin) {
-      record.status = 'ABSENT'
-    } else if (workingHours >= halfDayMin && workingHours < fullDayMin) {
+    if (workingHours < fullDayMin) {
       record.status = 'HALF_DAY'
     }
   }
