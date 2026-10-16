@@ -36,22 +36,23 @@ const OLD_REGIME_SLABS_SUPER_SENIOR = [
 ];
 
 /**
- * TDS slabs for New Tax Regime (FY 2026-27, Section 115BAC)
+ * TDS slabs for New Tax Regime (FY 2025-26 onwards, Section 115BAC)
  * Default regime from FY 2023-24
  */
 const NEW_REGIME_SLABS = [
-  { min: 0, max: 300000, rate: 0 },
-  { min: 300001, max: 700000, rate: 5 },
-  { min: 700001, max: 1000000, rate: 10 },
-  { min: 1000001, max: 1200000, rate: 15 },
-  { min: 1200001, max: 1500000, rate: 20 },
-  { min: 1500001, max: null, rate: 30 },
+  { min: 0, max: 400000, rate: 0 },
+  { min: 400000, max: 800000, rate: 5 },
+  { min: 800000, max: 1200000, rate: 10 },
+  { min: 1200000, max: 1600000, rate: 15 },
+  { min: 1600000, max: 2000000, rate: 20 },
+  { min: 2000000, max: 2400000, rate: 25 },
+  { min: 2400000, max: null, rate: 30 },
 ];
 
 /**
  * Rebate under Section 87A
  * Old Regime: Up to ₹5 lakh taxable income → Full rebate (max ₹12,500)
- * New Regime: Up to ₹7 lakh taxable income → Full rebate (max ₹25,000)
+ * New Regime: Up to 12 lakh taxable income, rebate up to 60,000
  */
 const REBATE_87A = {
   old: {
@@ -59,17 +60,18 @@ const REBATE_87A = {
     maxRebate: 12500,
   },
   new: {
-    maxIncome: 700000,
-    maxRebate: 25000,
+    maxIncome: 1200000,
+    maxRebate: 60000,
   },
 };
 
 /**
  * Standard Deduction
  * Old Regime: ₹50,000 (from FY 2019-20)
- * New Regime: ₹50,000 (from FY 2023-24)
+ * New Regime: 75,000 (from FY 2024-25)
  */
 const STANDARD_DEDUCTION = 50000;
+const NEW_REGIME_STANDARD_DEDUCTION = 75000;
 
 /**
  * Surcharge Rates (applicable on income tax)
@@ -192,6 +194,10 @@ function calculateTDSNewRegime(annualTaxableIncome) {
     rebate = Math.min(tax, REBATE_87A.new.maxRebate);
     tax -= rebate;
   }
+  const marginalRelief = annualTaxableIncome > REBATE_87A.new.maxIncome
+    ? Math.max(0, tax - (annualTaxableIncome - REBATE_87A.new.maxIncome))
+    : 0;
+  tax -= marginalRelief;
   
   // Calculate surcharge
   let surcharge = 0;
@@ -208,8 +214,9 @@ function calculateTDSNewRegime(annualTaxableIncome) {
   
   return {
     taxableIncome: annualTaxableIncome,
-    grossTax: tax + rebate,
+    grossTax: tax + rebate + marginalRelief,
     rebate87A: rebate,
+    marginalRelief,
     taxAfterRebate: tax,
     surcharge,
     cess,
@@ -237,7 +244,7 @@ const OLD_REGIME_EXEMPTIONS = {
 };
 
 const NEW_REGIME_EXEMPTIONS = {
-  standardDeduction: 50000,
+  standardDeduction: NEW_REGIME_STANDARD_DEDUCTION,
   hraExemption: false,
   ltaExemption: false,
   deductions80C: false,
@@ -273,7 +280,7 @@ function compareTaxRegimes(grossIncome, investments = {}, ageGroup = 'general') 
   );
   
   // New regime calculation (minimal exemptions)
-  const newTaxableIncome = Math.max(0, grossIncome - STANDARD_DEDUCTION);
+  const newTaxableIncome = Math.max(0, grossIncome - NEW_REGIME_STANDARD_DEDUCTION);
   
   const oldCalc = calculateTDSOldRegime(oldTaxableIncome, ageGroup);
   const newCalc = calculateTDSNewRegime(newTaxableIncome);
@@ -295,6 +302,7 @@ module.exports = {
   NEW_REGIME_SLABS,
   REBATE_87A,
   STANDARD_DEDUCTION,
+  NEW_REGIME_STANDARD_DEDUCTION,
   SURCHARGE_OLD,
   SURCHARGE_NEW,
   CESS_RATE,
