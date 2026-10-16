@@ -85,6 +85,14 @@ exports.runShiftFinalization = async (bufferMinutes = 120) => {
           const minutesAgo = nowInOrg.diff(shiftEndWithBuffer, 'minutes');
           
           // Format shift time for logging
+          // const formatShiftTimeForLog = (timeStr) => {
+          //   if (!timeStr) return timeStr;
+          //   const [h, m] = timeStr.split(':').map(Number);
+          //   const period = h >= 12 ? 'PM' : 'AM';
+          //   const displayHours = h % 12 || 12;
+          //   return `${String(displayHours).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
+          // };
+
           const formatShiftTimeForLog = (timeStr) => {
             if (!timeStr) return timeStr;
             const [h, m] = timeStr.split(':').map(Number);
@@ -93,7 +101,7 @@ exports.runShiftFinalization = async (bufferMinutes = 120) => {
             return `${String(displayHours).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
           };
           
-          
+
           // Process if shift ended (with buffer) between 0-60 minutes ago
           // This prevents reprocessing very old shifts
           if (minutesAgo >= 0 && minutesAgo < 60) {
