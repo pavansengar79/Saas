@@ -93,6 +93,7 @@ exports.runShiftFinalization = async (bufferMinutes = 120) => {
             return `${String(displayHours).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
           };
           
+          
           // Process if shift ended (with buffer) between 0-60 minutes ago
           // This prevents reprocessing very old shifts
           if (minutesAgo >= 0 && minutesAgo < 60) {
