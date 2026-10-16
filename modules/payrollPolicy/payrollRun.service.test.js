@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const mongoose = require("mongoose");
+const moment = require("moment-timezone");
 
 const employeeId = new mongoose.Types.ObjectId();
 const companyId = new mongoose.Types.ObjectId();
@@ -37,6 +38,7 @@ let approvedLeaves = [];
 let attendanceOnLeaveDays = [];
 let paidLeaveTypes = [{ _id: leaveTypeId, isPaid: true }];
 let payrollPolicyOptions;
+let holidays = [];
 
 stub("./payrollLock.service", { isPeriodLocked: async () => true });
 stub("../../utils/policyResolver", {
@@ -58,6 +60,7 @@ stub("../attendance/models/attendance.model", {
 });
 stub("../leave/models/leaveRequest.models", { find: () => query(approvedLeaves) });
 stub("../leave/models/leaveType.models", { find: () => query(paidLeaveTypes) });
+stub("../holiday/models/holiday.models", { find: () => query(holidays) });
 stub("../companyConfig/models/companyConfig.model", {
   findOne: () => query({ workWeek: ["MON", "TUE", "WED", "THU", "FRI"] }),
 });
@@ -236,9 +239,9 @@ test("a fully attended fixed-divisor month pays full base salary", async () => {
   const originalEndDay = policy.salaryCycle.endDay;
   employee.joiningDate = new Date("2025-01-01T00:00:00.000Z");
   policy.salaryCycle.endDay = 31;
-  attendanceTotals = { present: 22, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  attendanceTotals = { present: 23, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
   try {
-    const payslip = await runForEmployee(employeeId, companyId, unitId, "2026-10", { orgId: organizationId });
+    const payslip = await runForEmployee(employeeId, companyId, unitId, "2025-10", { orgId: organizationId });
     assert.equal(payslip.earnings.basic, 15000);
     assert.equal(payslip.grossSalary, 16320);
     assert.equal(payslip.deductions.lop, 0);
@@ -246,6 +249,66 @@ test("a fully attended fixed-divisor month pays full base salary", async () => {
     employee.joiningDate = originalJoiningDate;
     policy.salaryCycle.endDay = originalEndDay;
     attendanceTotals = { present: 5, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  }
+});
+
+test("current-month payroll stops attendance and LOP at today", async () => {
+  const originalNow = moment.now;
+  const originalJoiningDate = employee.joiningDate;
+  const originalEndDay = policy.salaryCycle.endDay;
+  moment.now = () => new Date("2026-10-16T12:00:00.000Z").getTime();
+  employee.joiningDate = new Date("2026-10-01T00:00:00.000Z");
+  policy.salaryCycle.endDay = 31;
+  attendanceTotals = { present: 0, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  try {
+    const payslip = await runForEmployee(employeeId, companyId, unitId, "2026-10", { orgId: organizationId });
+    assert.equal(attendanceMatch.date.$lte.toISOString(), "2026-10-16T18:29:59.999Z");
+    assert.equal(payslip.calculatedThrough.toISOString(), "2026-10-16T23:59:59.999Z");
+    assert.equal(payslip.totalWorkingDays, 22);
+    assert.equal(payslip.eligibleWorkingDays, 12);
+    assert.equal(payslip.lopDays, 12);
+    assert.equal(payslip.earnings.basic, 6000);
+    assert.equal(payslip.netSalary, 0);
+  } finally {
+    moment.now = originalNow;
+    employee.joiningDate = originalJoiningDate;
+    policy.salaryCycle.endDay = originalEndDay;
+    attendanceTotals = { present: 5, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  }
+});
+
+test("a configured national holiday without attendance does not become LOP", async () => {
+  const originalNow = moment.now;
+  const originalJoiningDate = employee.joiningDate;
+  const originalEndDay = policy.salaryCycle.endDay;
+  moment.now = () => new Date("2026-10-16T12:00:00.000Z").getTime();
+  employee.joiningDate = new Date("2026-10-01T00:00:00.000Z");
+  policy.salaryCycle.endDay = 31;
+  policy.salaryCycle.workingDaysCalc = "actual";
+  attendanceTotals = { present: 9, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  holidays = [{ date: new Date("2026-10-01T18:30:00.000Z"), unit_id: null, type: "NATIONAL" }];
+  try {
+    const payslip = await runForEmployee(employeeId, companyId, unitId, "2026-10", { orgId: organizationId });
+    assert.equal(payslip.totalWorkingDays, 22);
+    assert.equal(payslip.eligibleWorkingDays, 12);
+    assert.equal(payslip.lopDays, 2);
+    assert.equal(payslip.daysPayable, 10);
+
+    attendanceOnLeaveDays = [{ date: new Date("2026-10-02T00:00:00.000Z"), status: "ABSENT" }];
+    approvedLeaves = [{ startDate: new Date("2026-10-02T00:00:00Z"), endDate: new Date("2026-10-02T00:00:00Z"), leaveTypeId }];
+    holidays.push({ date: new Date("2026-10-03T00:00:00.000Z"), unit_id: null, type: "NATIONAL" });
+    const withAbsentRecord = await runForEmployee(employeeId, companyId, unitId, "2026-10", { orgId: organizationId });
+    assert.equal(withAbsentRecord.lopDays, 2);
+    assert.equal(withAbsentRecord.daysPayable, 10);
+  } finally {
+    moment.now = originalNow;
+    employee.joiningDate = originalJoiningDate;
+    policy.salaryCycle.endDay = originalEndDay;
+    policy.salaryCycle.workingDaysCalc = "fixed";
+    attendanceTotals = { present: 5, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+    attendanceOnLeaveDays = [];
+    approvedLeaves = [];
+    holidays = [];
   }
 });
 
