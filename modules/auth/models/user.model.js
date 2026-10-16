@@ -117,6 +117,12 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    googleId: {
+      type: String,
+      default: undefined,
+      index: { unique: true, sparse: true },
+    },
+
     // ─── Push Notifications (FCM) ────────────────────────────
     fcmTokens: [{
       token: {

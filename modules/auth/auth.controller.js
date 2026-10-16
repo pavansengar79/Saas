@@ -125,42 +125,34 @@ const AppError = require("../../utils/appError");
 };
 
 exports.googleCallback = async (req, res, next) => {
+  const { resolveCallbackUrl, buildRedirect } = require("./google.redirect");
+  const callbackUrl = req.googleCallbackUrl || resolveCallbackUrl(req.query.state);
+  const fail = message => res.redirect(buildRedirect(callbackUrl, { error: message }));
+
   try {
     const googleUser = req.user;
 
-    // ✅ Use the state parameter or fall back to the default URL
-    const returnUrl = req.query.state 
-      || `${process.env.GOOGLE_FRONTEND_REDIRECT_URI}/auth/google/callback`;
-
-    console.log("State:", req.query.state);
-    console.log("Return URL:", returnUrl);
-
     if (googleUser.isNewUser) {
-      const tempToken = jwt.sign(
-        {
-          email:    googleUser.email,
-          name:     googleUser.firstName,
-          googleId: googleUser.googleId,
-          isNewUser: true
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: "1h" }
-      );
-
-      const params = new URLSearchParams({
-        token : tempToken,
-        isNewUser: "true"
-      });
-
-      // ✅ Include the /auth/google/callback path
-      return res.redirect(
-        `${returnUrl}?${params.toString()}`
-      );
+      return res.redirect(buildRedirect(callbackUrl, {
+        newUser: "true",
+        email: googleUser.email,
+        name: googleUser.name || ""
+      }));
     }
 
-    // Existing user
-    const user = await User.findById(googleUser._id).populate("roleId");
-    const tenant = await Tenant.findOne({ _id: user.org_id, isDeleted: false });
+    const user = await User.findOne({ _id: googleUser.userId, is_deleted: false }).populate("roleId");
+    if (!user) return fail("Account not found");
+    if (user.status !== "ACTIVE") return fail("Your account is not active. Please contact your admin.");
+
+    const Employee = require("../employee/models/employee.model");
+    const terminatedEmployee = await Employee.findOne({ userId: user._id, status: "TERMINATED" }).select("_id").lean();
+    if (terminatedEmployee) return fail("Your account is not active. Please contact your admin.");
+    if (!user.roleId) return fail("No role is assigned to your account. Please contact your admin.");
+
+    if (user.mfaEnabled) {
+      const mfaToken = jwt.sign({ userId: user._id, mfaPending: true }, process.env.JWT_SECRET, { expiresIn: "5m" });
+      return res.redirect(buildRedirect(callbackUrl, { mfaRequired: "true", mfaToken, email: user.email }));
+    }
 
     const token = jwt.sign(
       {
@@ -177,7 +169,6 @@ exports.googleCallback = async (req, res, next) => {
       { expiresIn: "1d" }
     );
 
-    // ✅ MANUAL AUDIT LOG - GOOGLE LOGIN
     const AuditLog = require('../../models/auditLog.model');
     try {
       await AuditLog.create({
@@ -205,25 +196,17 @@ exports.googleCallback = async (req, res, next) => {
       console.error('[AuthAudit] Failed to log GOOGLE_LOGIN:', auditError.message);
     }
 
-    const daysLeft = tenant ? Math.ceil(
-      (new Date(tenant.trialEndsAt) - new Date()) / (1000 * 60 * 60 * 24)
-    ) : 0;
-
-    const params = new URLSearchParams({
+    const params = {
       token,
-      isOnboardingComplete: tenant?.isOnboardingComplete || false,
-      currentStep:          tenant?.onboardingStep || 1,
-      plan:                 tenant?.plan || "TRIAL",
-      daysLeft:             daysLeft > 0 ? daysLeft : 0
-    });
+      isOnboardingComplete: !!(user.org_id || user.company_id || user.unit_id),
+      isFirstLogin: !!user.is_first_login
+    };
 
-    // ✅ Include the /auth/google/callback path
-    return res.redirect(
-      `${returnUrl}?${params.toString()}`
-    );
+    return res.redirect(buildRedirect(callbackUrl, params));
 
   } catch (error) {
-    next(error);
+    console.error("[Google OAuth] googleCallback failed:", error);
+    return fail("Google sign-in failed. Please try again.");
   }
 };
 

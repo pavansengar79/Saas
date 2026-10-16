@@ -101,6 +101,56 @@ test("fixed 30-day policy prorates only eligible cycle days", () => {
   assert.equal(result.proRataFactor, 6 / 30);
 });
 
+test("calendar-day proration follows policy and can exclude joining day", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    joiningDate: "2026-10-06T00:00:00.000Z",
+    startDay: 1,
+    endDay: 13,
+    proRata: { basis: "calendar_days", includeJoiningDay: false },
+  });
+
+  assert.equal(result.eligibleCalendarDays, 7);
+  assert.equal(result.eligibleWorkingDays, 5);
+  assert.equal(result.proRataFactor, 7 / 31);
+});
+
+test("fixed-day proration uses the policy divisor", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    joiningDate: "2026-10-06T00:00:00.000Z",
+    proRata: { basis: "fixed_days", fixedDivisor: 26 },
+  });
+
+  assert.equal(result.proRataFactor, 19 / 26);
+});
+
+test("fixed divisor does not reduce full-month earnings", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    fixedWorkingDays: 30,
+    proRata: { basis: "fixed_days", fixedDivisor: 26 },
+  });
+
+  assert.equal(result.eligibleWorkingDays, 22);
+  assert.equal(result.proRataFactor, 1);
+});
+
+test("disabled proration pays the full cycle portion for a mid-month joiner", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    joiningDate: "2026-10-06T00:00:00.000Z",
+    proRata: { enabled: false },
+  });
+
+  assert.equal(result.eligibleWorkingDays, 19);
+  assert.equal(result.proRataFactor, 1);
+});
+
 test("exit dates constrain eligibility and future joiners are ineligible", () => {
   const exiting = calculatePayrollEligibility({
     year: 2026,
@@ -142,6 +192,19 @@ test("PF honors its ceiling and actual-basic policy", () => {
   assert.equal(actual.pfEmployee, 1920);
 });
 
+test("PF prorates the capped full-month basic when payable basic is reduced", () => {
+  const result = calculateStatutoryDeductions({
+    basic: 10000,
+    fullBasic: 20000,
+    grossSalary: 15000,
+    standardGross: 30000,
+    taxCompliance: { pfEnabled: true, pfCeilingAmount: 15000, esiEnabled: false },
+  });
+
+  assert.equal(result.pfEmployee, 900);
+  assert.equal(result.pfEmployer, 900);
+});
+
 test("ESI applies at or below its wage ceiling and stops above it", () => {
   const eligible = calculateStatutoryDeductions({
     basic: 10000,
@@ -158,6 +221,26 @@ test("ESI applies at or below its wage ceiling and stops above it", () => {
   assert.equal(eligible.esiEmployer, 682.47);
   assert.equal(ineligible.esiEmployee, 0);
   assert.equal(ineligible.esiEmployer, 0);
+});
+
+test("ESI uses standard wages for eligibility and earned wages for contributions", () => {
+  const excluded = calculateStatutoryDeductions({
+    basic: 8000,
+    grossSalary: 18000,
+    standardGross: 25000,
+    taxCompliance: { pfEnabled: false, esiEnabled: true },
+  });
+  const included = calculateStatutoryDeductions({
+    basic: 8000,
+    grossSalary: 18000,
+    standardGross: 20000,
+    taxCompliance: { pfEnabled: false, esiEnabled: true },
+  });
+
+  assert.equal(excluded.esiEmployee, 0);
+  assert.equal(excluded.esiEmployer, 0);
+  assert.equal(included.esiEmployee, 135);
+  assert.equal(included.esiEmployer, 585);
 });
 
 test("PT uses location precedence and remains zero when disabled", () => {

@@ -28,6 +28,7 @@ const calculatePayrollEligibility = ({
   startDay = 1,
   endDay = 31,
   fixedWorkingDays,
+  proRata = {},
 }) => {
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month, 1) - 1);
@@ -35,8 +36,14 @@ const calculatePayrollEligibility = ({
   const cycleEnd = new Date(Date.UTC(year, month - 1, Math.min(endDay, periodEnd.getUTCDate()) + 1) - 1);
   const joinedAt = joiningDate ? new Date(joiningDate) : periodStart;
   const exitedAt = exitDate ? new Date(exitDate) : periodEnd;
-  const eligibilityStart = joinedAt > cycleStart ? joinedAt : cycleStart;
-  const eligibilityEnd = exitedAt < cycleEnd ? exitedAt : cycleEnd;
+  const eligibilityStart = new Date(joinedAt > cycleStart ? joinedAt : cycleStart);
+  const eligibilityEnd = new Date(exitedAt < cycleEnd ? exitedAt : cycleEnd);
+  if (proRata.includeJoiningDay === false && joinedAt >= cycleStart && joinedAt <= cycleEnd) {
+    eligibilityStart.setUTCDate(eligibilityStart.getUTCDate() + 1);
+  }
+  if (proRata.includeExitDay === false && exitedAt >= cycleStart && exitedAt <= cycleEnd) {
+    eligibilityEnd.setUTCDate(eligibilityEnd.getUTCDate() - 1);
+  }
   const monthlyWorkingDays = countWorkingDays(periodStart, periodEnd, workDays);
   const totalWorkingDays = countWorkingDays(cycleStart, cycleEnd, workDays);
   const actualPayableDays = Math.max(0, (cycleEnd - cycleStart + 1) / MS_PER_DAY);
@@ -48,6 +55,24 @@ const calculatePayrollEligibility = ({
   const eligibleWorkingDays = eligibilityStart > eligibilityEnd
     ? 0
     : countWorkingDays(eligibilityStart, eligibilityEnd, workDays);
+  const proRataDivisor = proRata.basis === "calendar_days"
+    ? periodEnd.getUTCDate()
+    : proRata.basis === "fixed_days"
+      ? proRata.fixedDivisor || 26
+      : salaryDivisorDays;
+  const proRataDays = proRata.basis === "calendar_days"
+    ? eligibleCalendarDays
+    : eligibleWorkingDays;
+  const fullMonthCycle = cycleStart.getTime() === periodStart.getTime()
+    && cycleEnd.getTime() === periodEnd.getTime();
+  const fullCycleFactor = fullMonthCycle ? 1 : (salaryDivisorDays ? totalWorkingDays / salaryDivisorDays : 0);
+  const fullMonthEmployment = eligibilityStart.getTime() === periodStart.getTime()
+    && eligibilityEnd.getTime() === periodEnd.getTime();
+  const proRataFactor = eligibleCalendarDays === 0
+    ? 0
+    : proRata.enabled === false || fullMonthEmployment
+      ? fullCycleFactor
+      : proRataDivisor ? proRataDays / proRataDivisor : 0;
 
   return {
     periodStart,
@@ -60,7 +85,7 @@ const calculatePayrollEligibility = ({
     monthlyWorkingDays,
     salaryDivisorDays,
     eligibleWorkingDays,
-    proRataFactor: salaryDivisorDays ? eligibleWorkingDays / salaryDivisorDays : 0,
+    proRataFactor,
   };
 };
 
@@ -90,12 +115,12 @@ const resolveProfessionalTaxState = ({ policyState, unitState, companyState, emp
  * @param {object} input Salary and policy inputs.
  * @returns {object} Statutory amounts.
  */
-const calculateStatutoryDeductions = ({ basic, grossSalary, taxCompliance = {}, ptState }) => {
+const calculateStatutoryDeductions = ({ basic, fullBasic = basic, grossSalary, standardGross = grossSalary, taxCompliance = {}, ptState }) => {
   const pfEnabled = taxCompliance.pfEnabled !== false;
   const pfCeiling = taxCompliance.pfCeilingAmount ?? 15000;
   const pfBase = taxCompliance.pfApplyOnActualBasic
     ? basic
-    : Math.min(basic, pfCeiling);
+    : Math.min(fullBasic, pfCeiling) * (fullBasic > 0 ? basic / fullBasic : 0);
   const pfEmployee = pfEnabled
     ? Number((pfBase * ((taxCompliance.pfEmployeeRate ?? 12) / 100)).toFixed(2))
     : 0;
@@ -105,7 +130,7 @@ const calculateStatutoryDeductions = ({ basic, grossSalary, taxCompliance = {}, 
 
   const esiEnabled = taxCompliance.esiEnabled !== false;
   const esiWageCeiling = taxCompliance.esiWageCeiling ?? 21000;
-  const esiApplicable = esiEnabled && grossSalary <= esiWageCeiling;
+  const esiApplicable = esiEnabled && standardGross <= esiWageCeiling;
   const esiEmployee = esiApplicable
     ? Number((grossSalary * ((taxCompliance.esiEmployeeRate ?? 0.75) / 100)).toFixed(2))
     : 0;

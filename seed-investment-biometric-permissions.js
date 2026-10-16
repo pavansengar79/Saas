@@ -3,7 +3,8 @@
 
 const mongoose = require('mongoose');
 
-const MONGODB_URI = 'mongodb+srv://workprakhar9805_db_user:frPJmV3gDExUypUJ@cluster0.9m2axyw.mongodb.net/?appName=Cluster0';
+require('dotenv').config();
+const MONGO_URI = process.env.MONGO_URI;
 
 const PERMISSIONS_TO_ADD = [
   // Investment Declaration permissions
@@ -48,7 +49,8 @@ const ROLE_PERMISSIONS = {
 
 async function seedPermissions() {
   try {
-    await mongoose.connect(MONGODB_URI);
+    if (!MONGO_URI) throw new Error('MONGO_URI environment variable is not set');
+    await mongoose.connect(MONGO_URI);
     console.log('✅ Connected to MongoDB Atlas');
 
     const db = mongoose.connection.db;

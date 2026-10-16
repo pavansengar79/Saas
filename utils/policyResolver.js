@@ -203,16 +203,16 @@ const resolveAttendancePolicy = async (employeeId, company_id, unit_id = null) =
   return full;
 };
 
-const resolvePayrollPolicy = async (employeeId, company_id, unit_id = null) => {
+const resolvePayrollPolicy = async (employeeId, company_id, unit_id = null, { fresh = false } = {}) => {
   const key    = _cacheKey("payroll", company_id, employeeId);
-  const cached = _cacheGet(key);
+  const cached = fresh ? null : _cacheGet(key);
   if (cached) return cached;
 
   const ctx    = await _loadEmployeeContext(employeeId, company_id);
   const policy = await _resolve(PayrollPolicy, company_id, unit_id || ctx.unit_id, ctx, "payroll");
   const full   = await PayrollPolicy.findById(policy._id).lean();
 
-  _cacheSet(key, full);
+  if (!fresh) _cacheSet(key, full);
   return full;
 };
 

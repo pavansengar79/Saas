@@ -28,6 +28,9 @@ const notificationRoutes     = require("./modules/notification/notification.rout
 
 // ─── Admin Job Trigger (for manual testing) ──────────────────
 const { runAutoAbsentMarker } = require("./jobs/autoAbsentMarker.job");
+const { runShiftFinalization } = require("./jobs/shiftFinalization.job");
+const { expireOldDelegations } = require("./modules/delegation/delegation.service");
+const { runShiftSwapExpiry } = require("./jobs/shiftSwapExpiry.job");
 const { authenticate: authMiddleware } = require("./middlewares/auth.middleware");
 const attendancePolicyRoutes = require("./modules/attendancePolicy/attendancePolicy.routes");
 const payrollPolicyRoutes    = require("./modules/payrollPolicy/payrollPolicy.routes");
@@ -77,13 +80,27 @@ router.use("/notifications",        notificationRoutes);
 // Manual trigger for auto absent marker (Super Admin only)
 router.post("/admin/jobs/auto-absent", authMiddleware, async (req, res, next) => {
   try {
-    if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "unit_admin") {
+    if (req.user.role !== "SUPER_ADMIN") {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
     const result = await runAutoAbsentMarker();
     res.json({ success: true, message: "Auto absent marker completed", data: result });
   } catch (err) { next(err); }
 });
+const runAdminJob = (path, job) => {
+  router.post(path, authMiddleware, async (req, res, next) => {
+    try {
+      if (req.user.role !== "SUPER_ADMIN") {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
+      const result = await job();
+      res.json({ success: true, data: result });
+    } catch (err) { next(err); }
+  });
+};
+runAdminJob("/admin/jobs/shift-swap-expiry", runShiftSwapExpiry);
+runAdminJob("/admin/jobs/shift-finalization", () => runShiftFinalization(120));
+runAdminJob("/admin/jobs/delegation-expiry", expireOldDelegations);
 router.use("/attendance-policies", attendancePolicyRoutes);
 router.use("/payroll-policies",    payrollPolicyRoutes);
 router.use("/leave-policies",      leavePolicyRoutes);
@@ -101,15 +118,12 @@ router.use("/rosters",      rosterRoutes);
 router.use("/shift-swaps",  shiftSwapRoutes);
 router.use("/subscriptions", subscriptionRouter);
 
-module.exports = router;
 router.use("/delegations",  delegationRoutes);
 router.use("/regularisation/policies", regularisationPolicyRoutes);
 router.use("/policy-versions", policyVersionRoutes);
 
 // ── Biometric Integration ─────────────────────────────────────────────────
 router.use("/biometric", biometricRoutes);
-const subscriptionRoutes = require("./modules/subscription/subscription.routes");
-router.use("/subscription", subscriptionRoutes);
 
 // ── Global Search ──────────────────────────────────────────────────────────
 const searchRoutes = require("./modules/search/search.routes");

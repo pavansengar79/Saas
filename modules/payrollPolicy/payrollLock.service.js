@@ -145,7 +145,22 @@ exports.getLockStatus = async (monthStr, user) => {
   })
     .populate("lockedBy",   "name email")
     .populate("unlockedBy", "name email")
+    .populate("history.by", "name email")
     .lean();
+
+  if (user.unitId && !lock?.isLocked) {
+    const companyLock = await PayrollPeriodLock.findOne({
+      ...buildLockScope(user.orgId, user.companyId, null),
+      month,
+      year,
+      isLocked: true,
+    })
+      .populate("lockedBy", "name email")
+      .populate("unlockedBy", "name email")
+      .populate("history.by", "name email")
+      .lean();
+    if (companyLock) return companyLock;
+  }
 
   if (!lock) {
     return { period, isLocked: false, message: `Payroll for ${period} is not locked` };

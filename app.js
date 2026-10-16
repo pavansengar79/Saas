@@ -164,10 +164,9 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // ─── Schedule Jobs ───────────────────────────────────────────
-// Note: cron jobs won't reliably run on Vercel serverless (no
-// persistent process) — this needs Vercel Cron or an external
-// scheduler eventually, but left as-is since it's not today's issue.
-if (cron) {
+// In serverless deployments, an external scheduler must call the protected
+// /api/v1/admin/jobs/* endpoints; local node-cron requires a persistent process.
+if (cron && !process.env.VERCEL) {
   const { runAutoAbsentMarker } = require('./jobs/autoAbsentMarker.job');
 
   cron.schedule('55 23 * * *', async () => {
@@ -181,23 +180,7 @@ if (cron) {
 
   console.log('[Cron] Auto absent marker scheduled — runs at 11:55 PM daily');
 
-  const runShiftSwapExpiry = async () => {
-    const ShiftSwapRequest = require('./modules/shift/models/shiftSwapRequest.model');
-    const mongoose = require('mongoose');
-    const toMidnight = (d) => { const dt = new Date(d); dt.setHours(0,0,0,0); return dt; };
-    const today = toMidnight(new Date());
-
-    const result = await ShiftSwapRequest.updateMany(
-      {
-        status: { $in: ["PENDING_ACCEPTANCE", "PENDING_APPROVAL"] },
-        swapDate: { $lt: today },
-        is_deleted: false,
-      },
-      { $set: { status: "EXPIRED" } }
-    );
-
-    console.log(`[Cron] Shift swap expiry: ${result.modifiedCount} requests marked as expired`);
-  };
+  const { runShiftSwapExpiry } = require('./jobs/shiftSwapExpiry.job');
 
   cron.schedule('0 0 * * *', async () => {
     console.log('[Cron] Running shift swap auto-expiry...');
