@@ -7,7 +7,8 @@ const CompanyConfig = require("../companyConfig/models/companyConfig.model");
 const { resolveAttendancePolicy } = require("../../utils/policyResolver");
 const regularisationPolicyService = require("./regularisationPolicy.service");
 const { calculatePolicyOvertime } = require("./overtimeCalculator");
-const { creditedOvertime } = require('./creditedOvertime');
+const { creditedOvertime, uncreditedOvertimeHours } = require('./creditedOvertime');
+const moment = require('moment-timezone');
 const { correctAttendanceTimes } = require('./correctedAttendance');
 const { monthRange, attendanceFlags, summarizeAttendance, sessionHours } = require('./attendanceMetrics');
 const Holiday      = require("../holiday/models/holiday.models");     // T-19
@@ -46,6 +47,23 @@ const parseMonth = (monthStr, timezone = 'Asia/Kolkata') => {
   return { start, end, year, month };
 };
 
+const addUncreditedOvertime = async (records, timezone, config) => {
+  const candidates = records.filter(record => record.checkIn && record.checkOut && record.workingHours &&
+    !record.overtimeHours && record.shiftEnd &&
+    !moment(record.date).tz(timezone).isSame(moment(record.checkIn).tz(timezone), 'day'));
+  const policies = new Map();
+  await Promise.all(candidates.map(async record => {
+    const employeeId = String(record.employeeId?._id || record.employeeId);
+    if (!policies.has(employeeId)) {
+      policies.set(employeeId, resolveAttendancePolicy(employeeId, String(record.company_id),
+        record.unit_id ? String(record.unit_id) : null));
+    }
+    const policy = await policies.get(employeeId);
+    const hours = uncreditedOvertimeHours(record, timezone, config, policy);
+    if (hours > 0) record.uncreditedOvertimeHours = hours;
+  }));
+};
+
 const buildMyAttendanceFilter = (employee, start, end) => ({
   org_id: employee.org_id,
   company_id: employee.company_id,
@@ -55,9 +73,8 @@ const buildMyAttendanceFilter = (employee, start, end) => ({
   isDeleted: false,
 });
 
-const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
+const getAttendanceOverview = async (filter, employeeScope, statusFilter, timezone = "Asia/Kolkata") => {
   const moment = require("moment-timezone");
-  const timezone = "Asia/Kolkata";
   const employees = await Employee.find({
     org_id: filter.org_id,
     company_id: filter.company_id,
@@ -65,15 +82,16 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
     ...employeeScope,
     status: "ACTIVE",
     isDeleted: false,
-  }).select("_id joiningDate");
+  }).select("_id joiningDate unit_id");
   const scopedIds = new Set(employees.map(employee => String(employee._id)));
+  const employeeUnits = new Map(employees.map(employee => [String(employee._id), String(employee.unit_id || '')]));
   const joiningDates = new Map(employees.filter(employee => employee.joiningDate).map(employee => [
     String(employee._id), moment(employee.joiningDate).tz(timezone).format("YYYY-MM-DD"),
   ]));
   const attendanceFilter = { ...filter };
   delete attendanceFilter.status;
   const records = await Attendance.find(attendanceFilter).select("employeeId date status");
-  const overview = { present: 0, late: 0, onLeave: 0, absent: 0 };
+  const overview = { present: 0, late: 0, onLeave: 0, absent: 0, attendedWorkdays: 0, availableWorkdays: 0 };
   const recordedDays = new Set();
 
   for (const record of records) {
@@ -81,7 +99,7 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
     if (!scopedIds.has(employeeId)) continue;
     recordedDays.add(`${employeeId}:${moment(record.date).tz(timezone).format("YYYY-MM-DD")}`);
     if (statusFilter && record.status !== statusFilter) continue;
-    if (["PRESENT", "LATE", "WFH"].includes(record.status)) overview.present++;
+    if (["PRESENT", "LATE", "HALF_DAY", "WFH"].includes(record.status)) overview.present++;
     if (record.status === "LATE") overview.late++;
     if (record.status === "ON_LEAVE") overview.onLeave++;
     if (record.status === "ABSENT") overview.absent++;
@@ -100,7 +118,7 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
         date: filter.date,
         isActive: true,
         isDeleted: false,
-      }).select("date"),
+      }).select("date unit_id"),
       LeaveRequest.find({
         org_id: filter.org_id,
         company_id: filter.company_id,
@@ -110,7 +128,16 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
         endDate: { $gte: filter.date.$gte },
       }).select("employeeId startDate endDate"),
     ]);
-    const holidayDates = new Set(holidays.map(holiday => moment(holiday.date).tz(timezone).format("YYYY-MM-DD")));
+    const holidayDays = new Map();
+    for (const holiday of holidays) {
+      const dateKey = moment(holiday.date).tz(timezone).format("YYYY-MM-DD");
+      if (!holidayDays.has(dateKey)) holidayDays.set(dateKey, new Set());
+      holidayDays.get(dateKey).add(holiday.unit_id ? String(holiday.unit_id) : 'ALL');
+    }
+    const isHoliday = (dateKey, employeeId) => {
+      const units = holidayDays.get(dateKey);
+      return !!units && (units.has('ALL') || units.has(employeeUnits.get(employeeId)));
+    };
     const leaveDays = new Set();
     for (const leave of leaves) {
       const leaveEnd = moment.min(moment(leave.endDate).tz(timezone), end);
@@ -122,18 +149,31 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter) => {
     for (const day = moment(filter.date.$gte).tz(timezone).startOf("day"); day.isSameOrBefore(end); day.add(1, "day")) {
       if (day.isoWeekday() > 5) continue;
       const dateKey = day.format("YYYY-MM-DD");
-      if (holidayDates.has(dateKey)) continue;
       for (const employeeId of scopedIds) {
+        if (isHoliday(dateKey, employeeId)) continue;
         if (joiningDates.has(employeeId) && dateKey < joiningDates.get(employeeId)) continue;
         const employeeDay = `${employeeId}:${dateKey}`;
-        if (recordedDays.has(employeeDay)) continue;
         if (leaveDays.has(employeeDay)) {
-          if (!statusFilter || statusFilter === "ON_LEAVE") overview.onLeave++;
-        } else if (!statusFilter || statusFilter === "ABSENT") {
+          if (!recordedDays.has(employeeDay) && (!statusFilter || statusFilter === "ON_LEAVE")) overview.onLeave++;
+          continue;
+        }
+        overview.availableWorkdays++;
+        if (recordedDays.has(employeeDay)) continue;
+        if (!statusFilter || statusFilter === "ABSENT") {
           overview.absent++;
         }
       }
     }
+    const attendedDays = new Set();
+    for (const record of records) {
+      const employeeId = String(record.employeeId?._id || record.employeeId);
+      const dateKey = moment(record.date).tz(timezone).format("YYYY-MM-DD");
+      if (!scopedIds.has(employeeId) || moment(record.date).tz(timezone).isoWeekday() > 5 ||
+          isHoliday(dateKey, employeeId) || leaveDays.has(`${employeeId}:${dateKey}`) ||
+          (joiningDates.has(employeeId) && dateKey < joiningDates.get(employeeId))) continue;
+      if (["PRESENT", "LATE", "HALF_DAY", "WFH"].includes(record.status)) attendedDays.add(`${employeeId}:${dateKey}`);
+    }
+    overview.attendedWorkdays = attendedDays.size;
   }
 
   return overview;
@@ -1073,7 +1113,7 @@ exports.getAllAttendance = async (query, user) => {
 
   // Date range handling
   const moment = require("moment-timezone");
-  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId }).select('timezone').lean();
+  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId }).select('timezone overtimeEnabled overtimeThresholdHours').lean();
   const ORG_TZ = companyConfig?.timezone || 'Asia/Kolkata';
 
   if (startDate && endDate) {
@@ -1112,6 +1152,7 @@ exports.getAllAttendance = async (query, user) => {
         limit: Number(limit),
         total: 0,
         records: [],
+        overview: { present: 0, late: 0, onLeave: 0, absent: 0, attendedWorkdays: 0, availableWorkdays: 0 },
       };
     }
   }
@@ -1168,6 +1209,8 @@ exports.getAllAttendance = async (query, user) => {
     }
   }
 
+  const overviewFilter = { ...filter };
+
   // Status filter, treating "ABSENT but on approved leave" as ON_LEAVE
   if (status === "ON_LEAVE" && relabelIds.length) {
     filter.$or = [{ status: "ON_LEAVE" }, { _id: { $in: relabelIds } }];
@@ -1215,11 +1258,16 @@ exports.getAllAttendance = async (query, user) => {
       .slice(skip, skip + limitNum);
   }
 
+  await addUncreditedOvertime(records, ORG_TZ, companyConfig);
+
+  const overview = await getAttendanceOverview(overviewFilter, filter.employeeId ? { _id: filter.employeeId } : {}, status, ORG_TZ);
+
   return {
     page:  pageNum,
     limit: limitNum,
     total: dbTotal + synthetic.length,
     records,
+    overview,
   };
 };
 
@@ -1272,7 +1320,7 @@ exports.getTeamAttendance = async (query, user) => {
 
   // Date range handling
   const moment = require("moment-timezone");
-  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone overtimeEnabled overtimeThresholdHours').lean();
   const ORG_TZ = companyConfig?.timezone || 'Asia/Kolkata';
 
   if (startDate && endDate) {
@@ -1325,6 +1373,12 @@ exports.getTeamAttendance = async (query, user) => {
   }).select("_id name employeeId email departmentId profilePhoto unit_id joiningDate").lean();
 
   const synthetic = [];
+  const holidayMap = new Map();
+  const leavesByEmp = new Map();
+  const isHoliday = (dateKey, unitId) => {
+    const units = holidayMap.get(dateKey);
+    return !!units && (units.has('ALL') || (unitId && units.has(String(unitId))));
+  };
 
   if (employees.length && rangeStart.isSameOrBefore(rangeEnd)) {
     const empIds = employees.map(e => e._id);
@@ -1346,18 +1400,11 @@ exports.getTeamAttendance = async (query, user) => {
     ]);
 
     // date → Set of unit ids ("ALL" = company-wide holiday)
-    const holidayMap = new Map();
     for (const h of holidays) {
       const k = dayKey(h.date);
       if (!holidayMap.has(k)) holidayMap.set(k, new Set());
       holidayMap.get(k).add(h.unit_id ? String(h.unit_id) : "ALL");
     }
-    const isHoliday = (k, unitId) => {
-      const set = holidayMap.get(k);
-      return !!set && (set.has("ALL") || (unitId && set.has(String(unitId))));
-    };
-
-    const leavesByEmp = new Map();
     for (const l of leaves) {
       const id = String(l.employeeId);
       if (!leavesByEmp.has(id)) leavesByEmp.set(id, []);
@@ -1417,13 +1464,32 @@ exports.getTeamAttendance = async (query, user) => {
 
   const filtered = status ? allRecords.filter(r => r.status === status) : allRecords;
   const skip = (Number(page) - 1) * Number(limit);
+  const employeesById = new Map(employees.map(employee => [String(employee._id), employee]));
+  const availableDays = new Set();
+  const attendedDays = new Set();
+  for (const record of allRecords) {
+    const date = moment(record.date).tz(ORG_TZ);
+    const dateKey = date.format('YYYY-MM-DD');
+    const employeeId = String(record.employeeId?._id || record.employeeId);
+    const employee = employeesById.get(employeeId);
+    if (!employee || date.isoWeekday() > 5 || isHoliday(dateKey, employee.unit_id) ||
+        (employee.joiningDate && dayKey(employee.joiningDate) > dateKey) ||
+        (leavesByEmp.get(employeeId) || []).some(leave => leave.from <= dateKey && dateKey <= leave.to)) continue;
+    const flags = attendanceFlags(record);
+    if (flags.present || flags.absent) availableDays.add(`${employeeId}_${dateKey}`);
+    if (flags.present) attendedDays.add(`${employeeId}_${dateKey}`);
+  }
+
+  const pageRecords = filtered.slice(skip, skip + Number(limit));
+  await addUncreditedOvertime(pageRecords, ORG_TZ, companyConfig);
 
   return {
     page:    Number(page),
     limit:   Number(limit),
     total:   filtered.length,
     summary,
-    records: filtered.slice(skip, skip + Number(limit)),
+    overview: { ...summarizeAttendance(filtered), attendedWorkdays: attendedDays.size, availableWorkdays: availableDays.size },
+    records: pageRecords,
   };
 };
 

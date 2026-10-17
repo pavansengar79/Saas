@@ -72,3 +72,30 @@ exports.uploadLogo = async (req, res, next) => {
     next(err);
   }
 };
+
+exports.removeLogo = async (req, res, next) => {
+  try {
+    if (!req.user.company_id) {
+      return next(new AppError("Company ID not found in user context", 400));
+    }
+
+    const Company = require("./models/company.model");
+    const company = await Company.findByIdAndUpdate(
+      req.user.company_id,
+      { logo_url: null },
+      { new: true }
+    ).select("logo_url");
+
+    if (!company) {
+      return next(new AppError("Company not found", 404));
+    }
+
+    res.json({
+      success: true,
+      message: "Company logo removed successfully",
+      data: { logo_url: null },
+    });
+  } catch (err) {
+    next(err);
+  }
+};

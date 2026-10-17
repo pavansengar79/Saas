@@ -19,7 +19,7 @@ const original = {
 
 function stubActiveCompanyAdmin() {
   User.findById = () => ({ select: () => ({ lean: async () => ({ status: 'ACTIVE', roleId: 'company-admin-role' }) }) });
-  Role.findById = () => ({ select: () => ({ lean: async () => ({ slug: 'company_admin' }) }) });
+  Role.findById = () => ({ select: () => ({ lean: async () => ({ slug: 'company_admin', level: 'company' }) }) });
 }
 
 function restore() {
@@ -78,7 +78,7 @@ test('deleting a company admin does not save without confirmation', async () => 
   stubActiveCompanyAdmin();
   let saved = false;
   User.findOne = async () => ({
-    _id: { toString: () => 'admin-one' }, status: 'ACTIVE',
+    _id: { toString: () => 'admin-one' }, roleId: 'company-admin-role', status: 'ACTIVE',
     save: async () => { saved = true; },
   });
   try {

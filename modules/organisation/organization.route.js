@@ -22,6 +22,9 @@ router.post(
   organizationController.uploadLogo
 );
 
+// DELETE remove organization logo
+router.delete("/logo", authenticate, organizationController.removeLogo);
+
 // GET complete organization hierarchy tree
 router.get("/hierarchy-tree", authenticate, organizationController.getHierarchyTree);
 
