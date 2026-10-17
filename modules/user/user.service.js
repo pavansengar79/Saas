@@ -28,7 +28,6 @@ const buildScopeFilter = (user) => {
 
   if (user.level === "company") {
     filter.company_id = user.companyId;
-    filter.unit_id    = null;
   } else if (user.level === "unit") {
     filter.company_id = user.companyId;
     filter.unit_id    = user.unitId;
@@ -36,6 +35,12 @@ const buildScopeFilter = (user) => {
   // Org level → filter only by org_id to include all users in the org
 
   return filter;
+};
+
+const getAccessibleRoleLevels = (userLevel) => {
+  if (userLevel === "org") return ["org", "company"];
+  if (userLevel === "company") return ["company", "unit"];
+  return [userLevel];
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -359,23 +364,12 @@ exports.getUsers = async (query, currentUser) => {
 
   // ── SECURITY: Role Level Hierarchy Filtering - STRICT LEVEL ISOLATION ──
   // org_admin → can see/edit org + company (NOT unit)
-  // company_admin → can see/edit ONLY company (NOT org, NOT unit)
+  // company_admin → can see/edit company and unit users within their company
   // unit_admin → can see/edit ONLY unit
   const hierarchy = { org: 1, company: 2, unit: 3 };
   const currentUserLevelOrder = hierarchy[currentUser.level] || 3;
   
-  // Determine accessible levels - STRICT ISOLATION
-  let accessibleRoleLevels;
-  if (currentUser.level === 'org') {
-    // org_admin can manage org + company (NOT unit)
-    accessibleRoleLevels = ['org', 'company'];
-  } else if (currentUser.level === 'company') {
-    // company_admin can ONLY manage company (NOT org, NOT unit)
-    accessibleRoleLevels = ['company'];
-  } else {
-    // unit_admin can only manage their own level
-    accessibleRoleLevels = [currentUser.level];
-  }
+  const accessibleRoleLevels = getAccessibleRoleLevels(currentUser.level);
     
   const accessibleRoles = await Role.find({
     level: { $in: accessibleRoleLevels },
@@ -516,6 +510,13 @@ exports.updateUser = async (id, data, currentUser) => {
   });
   if (!user) throw new AppError("User not found", 404);
 
+  const userRole = await Role.findById(user.roleId).select("level").lean();
+  const userCurrentLevel = userRole?.level;
+  const allowedTargetLevels = getAccessibleRoleLevels(currentUser.level);
+  if (!allowedTargetLevels.includes(userCurrentLevel)) {
+    throw new AppError(`You cannot edit users with ${userCurrentLevel || 'unknown'} level role`, 403);
+  }
+
   // Role change track
   const roleChanged = data.roleId &&
     data.roleId.toString() !== user.roleId?.toString();
@@ -550,40 +551,24 @@ exports.updateUser = async (id, data, currentUser) => {
     const targetLevelOrder = hierarchy[newRole.level] || 3;
     
     // Get current target user's level
-    const userRole = await Role.findById(user.roleId).select('level').lean();
-    const userCurrentLevel = userRole?.level || 'unit';
     const userCurrentLevelOrder = hierarchy[userCurrentLevel] || 3;
     
     // ── CRITICAL: Cannot edit users at higher level ──
     if (userCurrentLevelOrder < currentUserLevelOrder) {
       throw new AppError(`You cannot edit users with ${userCurrentLevel} level (parent hierarchy)`, 403);
     }
-    
+
     // ── CRITICAL: Cannot promote users to parent level ──
     if (targetLevelOrder < userCurrentLevelOrder) {
       throw new AppError(`Cannot promote user from ${userCurrentLevel} to ${newRole.level} level (child cannot become parent)`, 403);
     }
     
-    // Determine allowed target levels - STRICT ISOLATION
-    let allowedTargetLevels;
-    if (currentUser.level === 'org') {
-      // org_admin can assign org or company roles (NOT unit)
-      allowedTargetLevels = ['org', 'company'];
-    } else if (currentUser.level === 'company') {
-      // company_admin can ONLY assign company roles (NOT org, NOT unit)
-      allowedTargetLevels = ['company'];
-    } else {
-      // unit_admin can only assign their own level
-      allowedTargetLevels = [currentUser.level];
-    }
-    
     if (!allowedTargetLevels.includes(newRole.level)) {
       throw new AppError(`You cannot assign ${newRole.level} level role`, 403);
     }
-    
-    // Can ONLY edit users with roles within allowed levels
-    if (!allowedTargetLevels.includes(userCurrentLevel)) {
-      throw new AppError(`You cannot edit users with ${userCurrentLevel || 'unknown'} level role`, 403);
+
+    if (newRole.level !== userCurrentLevel) {
+      throw new AppError(`You can only assign ${userCurrentLevel} level roles to this user`, 403);
     }
 
     if (newRole.level === "company") {
@@ -694,6 +679,11 @@ exports.getProgressionHistory = async (id, currentUser) => {
   });
   if (!user) throw new AppError("User not found", 404);
 
+  const userRole = await Role.findById(user.roleId).select("level").lean();
+  if (!getAccessibleRoleLevels(currentUser.level).includes(userRole?.level)) {
+    throw new AppError(`You cannot view users with ${userRole?.level || 'unknown'} level role`, 403);
+  }
+
   return await UserProgression.find({
     userId:  id,
     org_id:  currentUser.orgId,
@@ -735,6 +725,11 @@ exports.deleteUser = async (id, currentUser, confirmCompanyAdminDeactivation = f
   console.log('🔍 User found:', user ? { id: user._id, email: user.email, org_id: user.org_id } : null);
   
   if (!user) throw new AppError("User not found", 404);
+
+  const userRole = await Role.findById(user.roleId).select("level").lean();
+  if (!getAccessibleRoleLevels(currentUser.level).includes(userRole?.level)) {
+    throw new AppError(`You cannot delete users with ${userRole?.level || 'unknown'} level role`, 403);
+  }
 
   if (user._id.toString() === currentUser.userId) {
     throw new AppError("You cannot delete your own account", 400);

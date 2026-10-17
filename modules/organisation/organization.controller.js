@@ -131,6 +131,32 @@ exports.uploadLogo = async (req, res, next) => {
   }
 };
 
+exports.removeLogo = async (req, res, next) => {
+  try {
+    if (!req.user.orgId) {
+      return next(new AppError("Organization ID not found in user context", 400));
+    }
+
+    const org = await Organization.findByIdAndUpdate(
+      req.user.orgId,
+      { logo_url: null },
+      { new: true }
+    ).select("logo_url");
+
+    if (!org) {
+      return next(new AppError("Organization not found", 404));
+    }
+
+    res.json({
+      success: true,
+      message: "Organization logo removed successfully",
+      data: { logo_url: null },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/v1/organization/hierarchy-tree ─────────────────────
 // Returns complete nested hierarchy: Organization → Company → Units → Departments → Employees
 exports.getHierarchyTree = async (req, res, next) => {

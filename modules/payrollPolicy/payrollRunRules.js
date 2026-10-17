@@ -29,15 +29,19 @@ const calculatePayrollEligibility = ({
   endDay = 31,
   fixedWorkingDays,
   proRata = {},
+  asOf,
 }) => {
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month, 1) - 1);
   const cycleStart = new Date(Date.UTC(year, month - 1, startDay));
   const cycleEnd = new Date(Date.UTC(year, month - 1, Math.min(endDay, periodEnd.getUTCDate()) + 1) - 1);
+  const currentCycleEnd = asOf && asOf.getUTCFullYear() === year && asOf.getUTCMonth() === month - 1
+    ? new Date(Math.min(cycleEnd.getTime(), asOf.getTime()))
+    : cycleEnd;
   const joinedAt = joiningDate ? new Date(joiningDate) : periodStart;
   const exitedAt = exitDate ? new Date(exitDate) : periodEnd;
   const eligibilityStart = new Date(joinedAt > cycleStart ? joinedAt : cycleStart);
-  const eligibilityEnd = new Date(exitedAt < cycleEnd ? exitedAt : cycleEnd);
+  const eligibilityEnd = new Date(exitedAt < currentCycleEnd ? exitedAt : currentCycleEnd);
   if (proRata.includeJoiningDay === false && joinedAt >= cycleStart && joinedAt <= cycleEnd) {
     eligibilityStart.setUTCDate(eligibilityStart.getUTCDate() + 1);
   }
@@ -46,7 +50,7 @@ const calculatePayrollEligibility = ({
   }
   const monthlyWorkingDays = countWorkingDays(periodStart, periodEnd, workDays);
   const totalWorkingDays = countWorkingDays(cycleStart, cycleEnd, workDays);
-  const actualPayableDays = Math.max(0, (cycleEnd - cycleStart + 1) / MS_PER_DAY);
+  const actualPayableDays = Math.max(0, Math.floor((currentCycleEnd - cycleStart + 1) / MS_PER_DAY));
   const eligibleCalendarDays = eligibilityStart > eligibilityEnd
     ? 0
     : Math.floor((Date.UTC(eligibilityEnd.getUTCFullYear(), eligibilityEnd.getUTCMonth(), eligibilityEnd.getUTCDate())
@@ -64,8 +68,9 @@ const calculatePayrollEligibility = ({
     ? eligibleCalendarDays
     : eligibleWorkingDays;
   const fullMonthCycle = cycleStart.getTime() === periodStart.getTime()
-    && cycleEnd.getTime() === periodEnd.getTime();
-  const fullCycleFactor = fullMonthCycle ? 1 : (salaryDivisorDays ? totalWorkingDays / salaryDivisorDays : 0);
+    && currentCycleEnd.getTime() === periodEnd.getTime();
+  const currentCycleWorkingDays = countWorkingDays(cycleStart, currentCycleEnd, workDays);
+  const fullCycleFactor = fullMonthCycle ? 1 : (salaryDivisorDays ? currentCycleWorkingDays / salaryDivisorDays : 0);
   const fullMonthEmployment = eligibilityStart.getTime() === periodStart.getTime()
     && eligibilityEnd.getTime() === periodEnd.getTime();
   const proRataFactor = eligibleCalendarDays === 0

@@ -133,6 +133,7 @@ const updatePolicySchema = createPolicySchema.fork(
   ["name", "effectiveFrom"],
   (schema) => schema.optional()
 ).keys({
+  leaveTypes: Joi.array().items(leaveTypeSchema).optional(),
   changeNote: Joi.string().trim().max(500).optional().allow(null, ""),
 });
 

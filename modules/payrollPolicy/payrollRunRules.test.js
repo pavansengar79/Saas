@@ -151,6 +151,27 @@ test("disabled proration pays the full cycle portion for a mid-month joiner", ()
   assert.equal(result.proRataFactor, 1);
 });
 
+test("current-month payroll excludes future days from eligibility and earnings", () => {
+  const result = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    asOf: new Date("2026-10-16T23:59:59.999Z"),
+  });
+
+  assert.equal(result.totalWorkingDays, 22);
+  assert.equal(result.actualPayableDays, 16);
+  assert.equal(result.eligibleWorkingDays, 12);
+  assert.equal(result.proRataFactor, 12 / 22);
+
+  const withoutProration = calculatePayrollEligibility({
+    year: 2026,
+    month: 10,
+    asOf: new Date("2026-10-16T23:59:59.999Z"),
+    proRata: { enabled: false },
+  });
+  assert.equal(withoutProration.proRataFactor, 12 / 22);
+});
+
 test("exit dates constrain eligibility and future joiners are ineligible", () => {
   const exiting = calculatePayrollEligibility({
     year: 2026,

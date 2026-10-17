@@ -7,7 +7,7 @@ const Role = require('../role/role.model');
 const UserProgression = require('./models/userProgression.model');
 const { getUsers, updateUser } = require('./user.service');
 
-test('getUsers only uses linked Employee photos within company scope', async () => {
+test('company admins include unit-level users in their company-scoped list', async () => {
   const original = {
     userFind: User.find,
     userCountDocuments: User.countDocuments,
@@ -55,17 +55,25 @@ test('getUsers only uses linked Employee photos within company scope', async () 
     ];
 
     Role.findOne = () => ({ select: () => ({ lean: async () => null }) });
-    Role.find = () => ({ distinct: async () => ['unit-role'] });
-    User.find = () => ({
+    Role.find = (filter) => {
+      assert.deepEqual(filter.level, { $in: ['company', 'unit'] });
+      return { distinct: async () => ['company-role', 'unit-role'] };
+    };
+    User.find = (filter) => {
+      assert.equal(filter.company_id, 'company-one');
+      assert.equal(filter.unit_id, undefined);
+      return ({
       select() { return this; },
       populate() { return this; },
       sort() { return this; },
       skip() { return this; },
       limit: async () => users,
-    });
+      });
+    };
     User.countDocuments = async () => users.length;
     Employee.find = (filter) => {
       assert.equal(filter.company_id, 'company-one');
+      assert.equal(filter.unit_id, undefined);
       assert.equal(filter.isDeleted, false);
       assert.deepEqual(filter.userId, { $in: users.map((user) => user._id) });
       assert.equal(filter.$or, undefined);
@@ -80,6 +88,7 @@ test('getUsers only uses linked Employee photos within company scope', async () 
     assert.equal(result.users[0].profilePhoto, null);
     assert.equal(result.users[1].profilePhoto, 'user-photo');
     assert.equal(result.users[2].profilePhoto, 'linked-photo');
+    assert.equal(result.users.length, 3);
   } finally {
     User.find = original.userFind;
     User.countDocuments = original.userCountDocuments;
@@ -148,7 +157,7 @@ test('updateUser prevents company admins from promoting unit users outside their
     };
     User.findOne = async (filter) => {
       assert.equal(filter.company_id, 'company-one');
-      assert.equal(filter.unit_id, null);
+      assert.equal(filter.unit_id, undefined);
       return targetUser;
     };
     Role.findOne = () => ({
@@ -185,6 +194,65 @@ test('updateUser prevents company admins from promoting unit users outside their
     User.findOne = original.userFindOne;
     User.findById = original.userFindById;
     Role.findOne = original.roleFindOne;
+    Role.findById = original.roleFindById;
+    Employee.findOne = original.employeeFindOne;
+    UserProgression.create = original.progressionCreate;
+  }
+});
+
+test('company admins can change a unit user to another unit-level role', async () => {
+  const original = {
+    userFindOne: User.findOne,
+    userFindById: User.findById,
+    roleFindById: Role.findById,
+    employeeFindOne: Employee.findOne,
+    progressionCreate: UserProgression.create,
+  };
+  let saved = false;
+
+  try {
+    const targetUser = {
+      _id: 'target-user',
+      roleId: 'unit-admin-role',
+      company_id: 'company-one',
+      unit_id: 'unit-one',
+      save: async () => { saved = true; },
+    };
+    User.findOne = async (filter) => {
+      assert.equal(filter.company_id, 'company-one');
+      assert.equal(filter.unit_id, undefined);
+      return targetUser;
+    };
+    Role.findById = (id) => ({
+      select: () => ({
+        lean: async () => ({
+          slug: id === 'unit-hr-role' ? 'hr_manager' : 'unit_admin',
+          level: 'unit',
+        }),
+      }),
+    });
+    UserProgression.create = async () => {};
+    Employee.findOne = () => ({
+      select: () => ({ lean: async () => null }),
+    });
+    User.findById = () => ({
+      populate() { return this; },
+      lean: async () => ({ _id: 'target-user', roleId: 'unit-hr-role' }),
+    });
+
+    const updated = await updateUser('target-user', { roleId: 'unit-hr-role' }, {
+      level: 'company',
+      userId: 'company-admin',
+      orgId: 'org-one',
+      companyId: 'company-one',
+    });
+
+    assert.equal(saved, true);
+    assert.equal(targetUser.roleId, 'unit-hr-role');
+    assert.equal(updated.roleId, 'unit-hr-role');
+  } finally {
+    User.findOne = original.userFindOne;
+    User.findById = original.userFindById;
     Role.findById = original.roleFindById;
     Employee.findOne = original.employeeFindOne;
     UserProgression.create = original.progressionCreate;

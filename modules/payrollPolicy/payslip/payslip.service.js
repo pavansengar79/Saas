@@ -6,6 +6,11 @@
 const mongoose  = require("mongoose");
 const Payslip   = require("../models/payslip.model");
 const Employee  = require("../../employee/models/employee.model");
+const Attendance = require("../../attendance/models/attendance.model");
+const Holiday = require("../../holiday/models/holiday.models");
+const LeaveRequest = require("../../leave/models/leaveRequest.models");
+const LeaveType = require("../../leave/models/leaveType.models");
+const CompanyConfig = require("../../companyConfig/models/companyConfig.model");
 const Company   = require("../../company/models/company.model");
 const User      = require("../../auth/models/user.model");
 const AppError  = require("../../../utils/appError");
@@ -13,8 +18,22 @@ const { sendEmail }                = require("../../../utils/email/email");
 const { payslipPublishedTemplate } = require("../../../utils/email/templates/payslipEmail");
 const lockService = require("../payrollLock.service"); // Import lock service
 const { buildPayrollScope } = require("../payrollScope");
+const { buildPayslipCalendar } = require("./payslipCalendar");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
+const withPayableCalendarDays = payslip => {
+  const { daysPayable, eligibleCalendarDays, eligibleWorkingDays } = payslip;
+  const payableOffDays = daysPayable != null && eligibleCalendarDays != null && eligibleWorkingDays != null
+    && eligibleCalendarDays >= eligibleWorkingDays && daysPayable <= eligibleWorkingDays
+    ? eligibleCalendarDays - eligibleWorkingDays
+    : null;
+
+  return {
+    ...payslip,
+    payableOffDays,
+    payableCalendarDays: payableOffDays == null ? null : daysPayable + payableOffDays,
+  };
+};
 
 // ─────────────────────────────────────────────────────────────
 // GET MY PAYSLIPS (Employee self-service) — P-18
@@ -60,7 +79,7 @@ exports.getMyPayslips = async (query, user) => {
       name:       employee.name,
       employeeId: employee.employeeId,
     },
-    payslips,
+    payslips: payslips.map(withPayableCalendarDays),
     pagination: {
       total,
       page:  Number(page),
@@ -125,7 +144,7 @@ exports.getAllPayslips = async (query, user) => {
     .lean();
 
   return {
-    payslips,
+    payslips: payslips.map(withPayableCalendarDays),
     pagination: {
       total,
       page:  Number(page),
@@ -161,14 +180,39 @@ exports.getPayslipById = async (id, user) => {
 
   if (!payslip) throw new AppError("Payslip not found", 404);
 
-  return {
+  const start = new Date(Date.UTC(payslip.year, payslip.month - 1, 1));
+  const end = new Date(Date.UTC(payslip.year, payslip.month, 1) - 1);
+  const scope = { org_id: payslip.org_id, company_id: payslip.company_id };
+  const employeeId = payslip.employee_id._id;
+  const [attendance, holidays, leaves, config, employee] = await Promise.all([
+    Attendance.find({ ...scope, employeeId, date: { $gte: start, $lte: end } }).select("date status isLWP").lean(),
+    Holiday.find({ ...scope, $or: [{ unit_id: payslip.unit_id || null }, { unit_id: null }],
+      date: { $gte: start, $lte: end }, type: { $in: ["NATIONAL", "COMPANY"] }, isActive: true, isDeleted: false })
+      .select("date name").lean(),
+    LeaveRequest.find({ ...scope, employeeId, status: "APPROVED", startDate: { $lte: end }, endDate: { $gte: start } })
+      .select("startDate endDate isHalfDay leaveTypeId").lean(),
+    CompanyConfig.findOne({ company_id: payslip.company_id }).select("timezone workWeek").lean(),
+    Employee.findById(employeeId).select("joiningDate exitDate").lean(),
+  ]);
+  const paidTypes = leaves.length ? await LeaveType.find({
+    _id: { $in: leaves.map(leave => leave.leaveTypeId) }, company_id: payslip.company_id, isPaid: true,
+  }).select("_id").lean() : [];
+  const calendar = buildPayslipCalendar({
+    payslip, attendance, holidays, leaves,
+    paidLeaveTypeIds: new Set(paidTypes.map(type => String(type._id))),
+    workWeek: config?.workWeek, timezone: config?.timezone || "Asia/Kolkata",
+    joiningDate: employee?.joiningDate, exitDate: employee?.exitDate,
+  });
+
+  return withPayableCalendarDays({
     ...payslip,
+    calendar,
     daysPayable: payslip.daysPayable ?? (
       payslip.eligibleWorkingDays != null && payslip.lopDays != null
         ? Math.max(0, payslip.eligibleWorkingDays - payslip.lopDays)
         : null
     ),
-  };
+  });
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -181,7 +225,7 @@ exports.publishPayslip = async (id, user) => {
   const payslip = await Payslip.findOne({
     _id: toObjId(id),
     ...buildPayrollScope(user),
-  }).populate("employee_id", "name employeeId email userId unit_id org_id");
+  }).populate("employee_id", "name employeeId email userId unit_id org_id salary");
 
   if (!payslip) throw new AppError("Payslip not found", 404);
 
@@ -202,6 +246,17 @@ exports.publishPayslip = async (id, user) => {
 
   if (payslip.status !== "DRAFT") {
     throw new AppError(`Payslip is already ${payslip.status}. Only DRAFT can be published.`, 400);
+  }
+
+  const salary = payslip.employee_id?.salary;
+  if (!salary || ![salary.basic, salary.hra, salary.travelAllowance, salary.medicalAllowance, salary.specialAllowance]
+    .some(component => Number(component) > 0)) {
+    throw new AppError("Employee has no assigned salary structure; rerun payroll after assigning salary", 400);
+  }
+  if (![payslip.earnings?.basic, payslip.earnings?.hra, payslip.earnings?.travelAllowance,
+    payslip.earnings?.medicalAllowance, payslip.earnings?.specialAllowance]
+    .some(component => Number(component) > 0)) {
+    throw new AppError("Payslip has no calculated salary earnings; rerun payroll before publishing", 400);
   }
 
   payslip.status     = "PUBLISHED";
@@ -320,7 +375,7 @@ exports.publishAllPayslips = async (body, user) => {
   if (user.unitId) filter.unit_id = toObjId(user.unitId);
 
   const drafts = await Payslip.find(filter)
-    .populate("employee_id", "name employeeId email");
+    .populate("employee_id", "name employeeId email salary");
 
   if (!drafts.length) {
     throw new AppError(`No DRAFT payslips found for ${_monthName(month)} ${year}`, 404);
@@ -336,6 +391,17 @@ exports.publishAllPayslips = async (body, user) => {
 
   for (const payslip of drafts) {
     try {
+      const salary = payslip.employee_id?.salary;
+      if (!salary || ![salary.basic, salary.hra, salary.travelAllowance, salary.medicalAllowance, salary.specialAllowance]
+        .some(component => Number(component) > 0)) {
+        throw new AppError("Employee has no assigned salary structure; rerun payroll after assigning salary", 400);
+      }
+      if (![payslip.earnings?.basic, payslip.earnings?.hra, payslip.earnings?.travelAllowance,
+        payslip.earnings?.medicalAllowance, payslip.earnings?.specialAllowance]
+        .some(component => Number(component) > 0)) {
+        throw new AppError("Payslip has no calculated salary earnings; rerun payroll before publishing", 400);
+      }
+
       payslip.status     = "PUBLISHED";
       payslip.approvedBy = toObjId(user.userId);
       payslip.approvedAt = new Date();

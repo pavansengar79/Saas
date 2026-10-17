@@ -112,6 +112,7 @@ exports.updatePolicy = async (id, body, user) => {
 
   Object.assign(policy, {
     ...updateData,
+    ...(leaveTypes !== undefined ? { leaveTypes } : {}),
     version:   policy.version + 1,
     updatedBy: user.userId,
   });

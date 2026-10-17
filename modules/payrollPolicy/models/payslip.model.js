@@ -85,6 +85,7 @@ const payslipSchema = new mongoose.Schema({
   netSalary:   { type: Number, required: true, min: 0 },
 
   // ── Attendance summary (for LOP) ───────────────────────────
+  calculatedThrough: { type: Date },
   actualPayableDays: { type: Number },
   eligibleCalendarDays: { type: Number },
   totalWorkingDays:  { type: Number, default: 0 },

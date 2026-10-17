@@ -17,6 +17,8 @@ router.post(
   controller.uploadLogo
 );
 
+router.delete("/logo", authenticate, controller.removeLogo);
+
 // ── Company CRUD ──────────────────────────────────────────────
 // All routes: Org Admin only (permission slug: company.*)
 router.post(  "/",    authenticate, checkPermission("company.create"), controller.createCompany);

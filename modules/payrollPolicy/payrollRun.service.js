@@ -20,6 +20,7 @@ const Employee               = require("../employee/models/employee.model");
 const Attendance             = require("../attendance/models/attendance.model");
 const LeaveRequest           = require("../leave/models/leaveRequest.models");
 const LeaveType              = require("../leave/models/leaveType.models");
+const Holiday                = require("../holiday/models/holiday.models");
 const LeaveBalance           = require("../leave/models/leaveBalance.models");
 const CompanyConfig          = require("../companyConfig/models/companyConfig.model");
 const Company                = require("../company/models/company.model");
@@ -40,7 +41,37 @@ const parseMonth = (monthStr) => {
   return { year, month, start, end };
 };
 
-const getUnrecordedPaidLeaveDays = async (employee, company_id, start, end, timezone, workDayNumbers) => {
+const getUnrecordedHolidayDays = async (employee, company_id, start, end, timezone, workDayNumbers) => {
+  const holidays = await Holiday.find({
+    org_id: employee.org_id,
+    company_id,
+    $or: [{ unit_id: employee.unit_id || null }, { unit_id: null }],
+    date: { $gte: start, $lte: end },
+    type: { $in: ["NATIONAL", "COMPANY"] },
+    isActive: true,
+    isDeleted: false,
+  }).select("date").lean();
+  const holidayDates = new Set(holidays
+    .filter(holiday => workDayNumbers.includes(moment(holiday.date).tz(timezone).day() + 1))
+    .map(holiday => moment(holiday.date).tz(timezone).format("YYYY-MM-DD")));
+  if (!holidayDates.size) return { credit: 0, dates: holidayDates };
+
+  const records = await Attendance.find({
+    employeeId: employee._id,
+    company_id,
+    date: { $gte: start, $lte: end },
+  }).select("date status isLWP").lean();
+  const recordByDay = new Map(records.map(record => [moment(record.date).tz(timezone).format("YYYY-MM-DD"), record]));
+  let credit = 0;
+  for (const day of holidayDates) {
+    const record = recordByDay.get(day);
+    if (!record || record.status === "ABSENT" || (record.status === "ON_LEAVE" && record.isLWP)) credit++;
+    else if (record.status === "HALF_DAY") credit += 0.5;
+  }
+  return { credit, dates: holidayDates };
+};
+
+const getUnrecordedPaidLeaveDays = async (employee, company_id, start, end, timezone, workDayNumbers, holidayDates = new Set()) => {
   const leaves = await LeaveRequest.find({
     org_id: employee.org_id,
     company_id,
@@ -72,6 +103,7 @@ const getUnrecordedPaidLeaveDays = async (employee, company_id, start, end, time
     for (const day = first.clone(); day.isSameOrBefore(last, "day"); day.add(1, "day")) {
       if (!workDayNumbers.includes(day.day() + 1)) continue;
       const key = day.format("YYYY-MM-DD");
+      if (holidayDates.has(key)) continue;
       paidDays.set(key, Math.max(paidDays.get(key) || 0, leave.isHalfDay ? 0.5 : 1));
     }
   }
@@ -106,6 +138,7 @@ const calculateForEmployee = async (
     unit_id?.toString() || null
   );
 
+  const timezone = config?.timezone || "Asia/Kolkata";
   const eligibility = calculatePayrollEligibility({
     year,
     month,
@@ -118,9 +151,9 @@ const calculateForEmployee = async (
       ? policy.salaryCycle.fixedWorkingDays
       : undefined,
     proRata: policy?.proRata,
+    asOf: new Date(`${moment().tz(timezone).format("YYYY-MM-DD")}T23:59:59.999Z`),
   });
   const { totalWorkingDays, monthlyWorkingDays, salaryDivisorDays, eligibleWorkingDays, proRataFactor } = eligibility;
-  const timezone = config?.timezone || "Asia/Kolkata";
   const attendanceStart = moment.tz(eligibility.eligibilityStart.toISOString().slice(0, 10), "YYYY-MM-DD", timezone).startOf("day").toDate();
   const attendanceEnd = moment.tz(eligibility.eligibilityEnd.toISOString().slice(0, 10), "YYYY-MM-DD", timezone).endOf("day").toDate();
   const workDayNumbers = (config?.workWeek || ["MON", "TUE", "WED", "THU", "FRI"])
@@ -160,8 +193,9 @@ const calculateForEmployee = async (
   ]);
 
   const att          = attendanceSummary[0] || { present: 0, halfDay: 0, weekendWorked: 0, weekendHalfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
-  const unrecordedPaidLeave = await getUnrecordedPaidLeaveDays(employee, company_id, attendanceStart, attendanceEnd, timezone, workDayNumbers);
-  const regularDaysPresent = att.present + att.halfDay + att.onLeave + att.holiday + unrecordedPaidLeave;
+  const unrecordedHoliday = await getUnrecordedHolidayDays(employee, company_id, attendanceStart, attendanceEnd, timezone, workDayNumbers);
+  const unrecordedPaidLeave = await getUnrecordedPaidLeaveDays(employee, company_id, attendanceStart, attendanceEnd, timezone, workDayNumbers, unrecordedHoliday.dates);
+  const regularDaysPresent = att.present + att.halfDay + att.onLeave + att.holiday + unrecordedPaidLeave + unrecordedHoliday.credit;
   const extraDaysWorked = (att.weekendWorked || 0) + (att.weekendHalfDay || 0);
   const daysPresent = regularDaysPresent + extraDaysWorked;
   const daysPayable = Math.min(eligibleWorkingDays, regularDaysPresent) + extraDaysWorked;
@@ -432,6 +466,7 @@ const calculateForEmployee = async (
     grossSalary:       parseFloat(grossBeforeLOP.toFixed(2)),
     grossAfterLOP:      parseFloat(grossSalary.toFixed(2)),     //
     netSalary:         Math.max(0, netSalary),
+    calculatedThrough: eligibility.eligibilityEnd,
     actualPayableDays: eligibility.actualPayableDays,
     eligibleCalendarDays: eligibility.eligibleCalendarDays,
     totalWorkingDays,
