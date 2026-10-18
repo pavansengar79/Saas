@@ -38,8 +38,16 @@ const deductionsSchema = new mongoose.Schema({
   other:           { type: Number, default: 0 },
 }, { _id: false });
 
+const pfBreakupSchema = new mongoose.Schema({
+  eps:   { type: Number, default: 0 },  // 8.33% of wages up to ceiling (Pension)
+  epf:   { type: Number, default: 0 },  // employer PF minus EPS
+  edli:  { type: Number, default: 0 },  // 0.5% of wages up to ceiling
+  admin: { type: Number, default: 0 },  // 0.5% EPF admin charges
+}, { _id: false });
+
 const employerContributionsSchema = new mongoose.Schema({
   pf:       { type: Number, default: 0 },
+  pfBreakup: { type: pfBreakupSchema, default: () => ({}) },
   esi:      { type: Number, default: 0 },
   gratuity: { type: Number, default: 0 },
 }, { _id: false });
@@ -118,6 +126,9 @@ const payslipSchema = new mongoose.Schema({
     surcharge:       { type: Number, default: 0 },
     cess:            { type: Number, default: 0 },
     totalTax:         { type: Number, default: 0 },
+    projectedAnnualGross: { type: Number, default: 0 },
+    remainingMonths:  { type: Number, default: 0 },
+    priorTDS:         { type: Number, default: 0 },
   },
   
   investmentSummary: {
@@ -177,6 +188,19 @@ const payslipSchema = new mongoose.Schema({
   approvedBy:  { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   approvedAt:  { type: Date, default: null },
   isDeleted:   { type: Boolean, default: false },
+
+  // ── Revisions (P0-7) — status stays PUBLISHED/PAID so the employee still sees it
+  isRevised:     { type: Boolean, default: false },
+  revisionCount: { type: Number, default: 0 },
+  revisionHistory: [{
+    revisedAt:        { type: Date, default: Date.now },
+    revisedBy:        { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    reason:           { type: String, required: true },
+    statusAtRevision: { type: String },
+    oldValues:        { type: mongoose.Schema.Types.Mixed },
+    newValues:        { type: mongoose.Schema.Types.Mixed },
+    _id: false,
+  }],
 },
 {
   timestamps: true,

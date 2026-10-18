@@ -53,6 +53,14 @@ exports.markAsPaid = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// PATCH /api/v1/payslips/:id/revise — PUBLISHED / PAID only, reason required
+exports.revisePayslip = async (req, res, next) => {
+  try {
+    const data = await payslipService.revisePayslip(req.params.id, req.body, req.user);
+    res.json({ success: true, message: "Payslip revised", data });
+  } catch (err) { next(err); }
+};
+
 // DELETE /api/v1/payslips/:id — only DRAFT
 exports.deletePayslip = async (req, res, next) => {
   try {

@@ -26,6 +26,7 @@ router.get("/:id",           checkPermission("payroll.read"),   ctrl.getPayslipB
 router.get("/:id/pdf",       checkPermission("payroll.read"),   pdfCtrl.downloadPayslipPdf);
 router.patch("/:id/publish", checkPermission("payroll.run"),    ctrl.publishPayslip);
 router.patch("/:id/mark-paid", checkPermission("payroll.run"),  ctrl.markAsPaid);
+router.patch("/:id/revise",  checkPermission("payroll.run"),    ctrl.revisePayslip);
 router.delete("/:id",        checkPermission("payroll.run"),    ctrl.deletePayslip);
 
 module.exports = router;
