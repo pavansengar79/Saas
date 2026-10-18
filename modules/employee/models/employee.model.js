@@ -90,6 +90,9 @@ const employeeSchema = new mongoose.Schema({
 
   alternatePhone: { type: String },
   dateOfBirth:    { type: Date },
+  // P0-6: false for employees who are not EPS members (e.g. joined after
+  // Sep 2014 with basic above the wage ceiling). EPS also stops at age 58.
+  epsEligible:    { type: Boolean, default: true },
 
   gender: {
     type: String,

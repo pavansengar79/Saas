@@ -15,6 +15,10 @@ const {
   resolveProfessionalTaxState,
   calculateStatutoryDeductions,
   getFinancialYear,
+  isEpsEligibleByAge,
+  projectAnnualIncomeForTDS,
+  calculateMonthlyTDS,
+  getPriorFinancialYearPeriods,
 } = require("./payrollRunRules");
 const Employee               = require("../employee/models/employee.model");
 const Attendance             = require("../attendance/models/attendance.model");
@@ -151,7 +155,8 @@ const calculateForEmployee = async (
       ? policy.salaryCycle.fixedWorkingDays
       : undefined,
     proRata: policy?.proRata,
-    asOf: new Date(`${moment().tz(timezone).format("YYYY-MM-DD")}T23:59:59.999Z`),
+    // P0-3: no asOf — payroll is always for the whole month. Days not yet
+    // worked must not become LOP when payroll is run early.
   });
   const { totalWorkingDays, monthlyWorkingDays, salaryDivisorDays, eligibleWorkingDays, proRataFactor } = eligibility;
   const attendanceStart = moment.tz(eligibility.eligibilityStart.toISOString().slice(0, 10), "YYYY-MM-DD", timezone).startOf("day").toDate();
@@ -286,16 +291,15 @@ const calculateForEmployee = async (
     detectedHours: att.overtimeHours || 0,
     attendanceOvertime: attendancePolicy.overtime,
     payrollOvertime: policy?.overtimePay,
+    // P0-2: hourly OT rate comes from the FULL monthly component,
+    // not the prorated one — a mid-month joiner's hour is worth the same.
     salary: {
-      basic,
-      hra,
-      travelAllowance: travel,
-      medicalAllowance: medical,
-      specialAllowance: special,
-      customComponents: (salary?.customComponents || []).map(component => ({
-        ...component,
-        amount: component.amount * earningsFactor,
-      })),
+      basic: salary?.basic || 0,
+      hra: salary?.hra || 0,
+      travelAllowance: salary?.travelAllowance || 0,
+      medicalAllowance: salary?.medicalAllowance || 0,
+      specialAllowance: salary?.specialAllowance || 0,
+      customComponents: salary?.customComponents || [],
     },
     workingDays: overtimeWorkingDays,
     standardHours: config?.standardHoursPerDay || 8,
@@ -320,6 +324,7 @@ const calculateForEmployee = async (
   const {
     pfEmployee,
     pfEmployer,
+    pfEmployerBreakup,
     esiEmployee,
     esiEmployer,
     professionalTax,
@@ -330,6 +335,11 @@ const calculateForEmployee = async (
     standardGross: monthlyGross,
     taxCompliance: policy?.taxCompliance,
     ptState,
+    // P0-5: ceiling depends on the payroll month (25,000 from Sep 2026)
+    year,
+    month,
+    // P0-6: EPS stops at 58, or if the employee is not an EPS member
+    epsEligible: employee.epsEligible !== false && isEpsEligibleByAge(employee.dateOfBirth, year, month),
   });
 
   // ── TDS Calculation (Old/New Regime) ──────────────────────────────────────
@@ -353,23 +363,39 @@ const calculateForEmployee = async (
       const totalExemption = investments.reduce((sum, inv) => sum + (inv.approvedAmount || inv.declaredAmount || 0), 0);
       
       const regime = policy?.tdsConfig?.taxRegime || 'new';
-      const annualGross = monthlyGross * 12;
-      const taxableIncome = Math.max(0, annualGross - (regime === 'new' ? NEW_REGIME_STANDARD_DEDUCTION : STANDARD_DEDUCTION)
+
+      // P0-4: FY-based projection. Past months = what was actually paid,
+      // this month = actual gross after LOP, future months = full monthly gross.
+      const priorPeriods = getPriorFinancialYearPeriods(year, month);
+      const priorPayslips = priorPeriods.length
+        ? await Payslip.find({
+          employee_id: employee._id,
+          $or: priorPeriods,
+          status: { $ne: "DRAFT" },
+        }).select("grossSalary grossAfterLOP deductions.lop deductions.tds").lean()
+        : [];
+      const priorGross = priorPayslips.reduce((sum, p) => sum
+        + (p.grossAfterLOP > 0 ? p.grossAfterLOP : (p.grossSalary || 0) - (p.deductions?.lop || 0)), 0);
+      const priorTDS = priorPayslips.reduce((sum, p) => sum + (p.deductions?.tds || 0), 0);
+      const { projectedAnnualGross, remainingMonths } = projectAnnualIncomeForTDS({
+        month,
+        priorGross,
+        currentGross: grossSalary,
+        monthlyGross,
+      });
+      const taxableIncome = Math.max(0, projectedAnnualGross - (regime === 'new' ? NEW_REGIME_STANDARD_DEDUCTION : STANDARD_DEDUCTION)
         - (regime === 'old' ? totalExemption : 0));
-      
-      // Calculate age for senior citizen exemption
-      const age = employee.dateOfBirth ? Math.floor((new Date() - new Date(employee.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 30;
+
+      // Age on the last day of the FY (31 March) for senior-citizen slabs
+      const fyEnd = new Date(Date.UTC(month >= 4 ? year + 1 : year, 2, 31));
+      const age = employee.dateOfBirth ? Math.floor((fyEnd - new Date(employee.dateOfBirth)) / (365.25 * 24 * 60 * 60 * 1000)) : 30;
       const ageGroup = age >= 80 ? 'super_senior' : age >= 60 ? 'senior' : 'general';
-      
-      if (regime === 'new') {
-        const tdsCalc = calculateTDSNewRegime(taxableIncome);
-        tds = tdsCalc.monthlyTDS;
-        taxBreakdown = tdsCalc;
-      } else {
-        const tdsCalc = calculateTDSOldRegime(taxableIncome, ageGroup);
-        tds = tdsCalc.monthlyTDS;
-        taxBreakdown = tdsCalc;
-      }
+
+      const tdsCalc = regime === 'new'
+        ? calculateTDSNewRegime(taxableIncome)
+        : calculateTDSOldRegime(taxableIncome, ageGroup);
+      tds = calculateMonthlyTDS(tdsCalc.totalTax, priorTDS, remainingMonths);
+      taxBreakdown = { ...tdsCalc, projectedAnnualGross, remainingMonths, priorTDS };
     } catch (err) {
       throw new AppError(`TDS calculation failed: ${err.message}`, 500);
     }
@@ -380,10 +406,10 @@ const calculateForEmployee = async (
   const netSalary       = parseFloat((grossSalary - (pfEmployee + esiEmployee + tds + professionalTax)).toFixed(2));
 
   // ── Calculate YTD (Year-to-Date) ─────────────────────────────────────────
+  // YTD follows the Indian financial year (Apr–Mar), not the calendar year
   const ytdPayslips = await Payslip.find({
     employee_id: employee._id,
-    year,
-    month: { $lte: month },
+    $or: [...getPriorFinancialYearPeriods(year, month), { year, month }],
     status: { $ne: "DRAFT" }
   }).lean();
   
@@ -488,6 +514,7 @@ const calculateForEmployee = async (
     // Employer contributions
     employerContributions: {
       pf:    pfEmployer,
+      pfBreakup: pfEmployerBreakup,   // P0-6: EPS / EPF / EDLI / admin
       esi:   esiEmployer,
       gratuity: policy?.taxCompliance?.gratuityEnabled ? parseFloat((basic * ((policy?.taxCompliance?.gratuityRate ?? 4.81) / 100)).toFixed(2)) : 0
     },
@@ -501,6 +528,9 @@ const calculateForEmployee = async (
       surcharge: taxBreakdown.surcharge,
       cess: taxBreakdown.cess,
       totalTax: taxBreakdown.totalTax,
+      projectedAnnualGross: taxBreakdown.projectedAnnualGross,
+      remainingMonths: taxBreakdown.remainingMonths,
+      priorTDS: taxBreakdown.priorTDS,
     } : null,
     
     // Year-to-Date

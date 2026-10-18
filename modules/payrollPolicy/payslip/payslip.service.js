@@ -472,6 +472,25 @@ exports.markAsPaid = async (id, body, user) => {
 };
 
 // ─────────────────────────────────────────────────────────────
+// REVISE — correct a PUBLISHED / PAID payslip with a reason (P0-7)
+// PATCH /api/v1/payslips/:id/revise
+// body: { reason, earnings?: { bonus: 5000 }, deductions?: { tds: 1200 } }
+// ─────────────────────────────────────────────────────────────
+exports.revisePayslip = async (id, body, user) => {
+  const { applyPayslipRevision } = require("./payslipRevision");
+  const payslip = await Payslip.findOne({
+    _id: toObjId(id),
+    isDeleted: { $ne: true },
+    ...buildPayrollScope(user),
+  });
+  if (!payslip) throw new AppError("Payslip not found", 404);
+
+  applyPayslipRevision(payslip, body, user.userId);
+  await payslip.save();
+  return payslip;
+};
+
+// ─────────────────────────────────────────────────────────────
 // DELETE (soft) — only DRAFT can be deleted
 // DELETE /api/v1/payslips/:id
 // ─────────────────────────────────────────────────────────────

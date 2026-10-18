@@ -40,6 +40,8 @@ exports.createEmployeeSchema = Joi.object({
       "string.pattern.base": "Please provide a valid 10 digit phone number"
     }),
 
+  epsEligible: Joi.boolean().optional(),
+
   dateOfBirth: Joi.date()
     .max("now")
     .optional()
@@ -198,6 +200,7 @@ exports.updateEmployeeSchema = Joi.object({
   phone:          Joi.string().optional(),
   alternatePhone: Joi.string().optional(),
   dateOfBirth:    Joi.date().optional(),
+  epsEligible:    Joi.boolean().optional(),
   gender:         Joi.string().valid("MALE", "FEMALE", "OTHER").optional(),
   bloodGroup:     Joi.string().valid("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-").optional(),
   maritalStatus:  Joi.string().valid("SINGLE", "MARRIED", "DIVORCED", "WIDOWED").optional(),

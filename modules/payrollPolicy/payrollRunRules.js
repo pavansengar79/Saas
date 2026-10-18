@@ -31,6 +31,10 @@ const calculatePayrollEligibility = ({
   proRata = {},
   asOf,
 }) => {
+  // P0-1: never assume a joining date — a missing one used to mean "full month paid".
+  if (!joiningDate) {
+    throw new AppError("Employee has no joining date set. Cannot run payroll.", 400);
+  }
   const periodStart = new Date(Date.UTC(year, month - 1, 1));
   const periodEnd = new Date(Date.UTC(year, month, 1) - 1);
   const cycleStart = new Date(Date.UTC(year, month - 1, startDay));
@@ -38,7 +42,7 @@ const calculatePayrollEligibility = ({
   const currentCycleEnd = asOf && asOf.getUTCFullYear() === year && asOf.getUTCMonth() === month - 1
     ? new Date(Math.min(cycleEnd.getTime(), asOf.getTime()))
     : cycleEnd;
-  const joinedAt = joiningDate ? new Date(joiningDate) : periodStart;
+  const joinedAt = new Date(joiningDate);
   const exitedAt = exitDate ? new Date(exitDate) : periodEnd;
   const eligibilityStart = new Date(joinedAt > cycleStart ? joinedAt : cycleStart);
   const eligibilityEnd = new Date(exitedAt < currentCycleEnd ? exitedAt : currentCycleEnd);
@@ -115,39 +119,147 @@ const resolveProfessionalTaxState = ({ policyState, unitState, companyState, emp
   return state ? state.trim().toUpperCase() : null;
 };
 
+const EPF_CEILING_OLD = 15000;
+const EPF_CEILING_NEW = 25000; // S.O. 5109(E), effective 17 Sep 2026
+
+/**
+ * P0-5: statutory EPF wage ceiling for a payroll month.
+ * September 2026 has no official split method — "split" (default) prorates
+ * 16 days at 15,000 and 14 days at 25,000; "full" applies 25,000 for the whole month.
+ * Confirm the September choice with your CA and set taxCompliance.pfSep2026Transition.
+ * @param {number} year Payroll year.
+ * @param {number} month Payroll month (1-12).
+ * @param {"split"|"full"} sepMode September 2026 treatment.
+ * @returns {number} Ceiling in rupees.
+ */
+const getStatutoryPfCeiling = (year, month, sepMode = "split") => {
+  const period = year * 12 + month;
+  const sep2026 = 2026 * 12 + 9;
+  if (period > sep2026) return EPF_CEILING_NEW;
+  if (period < sep2026) return EPF_CEILING_OLD;
+  if (sepMode === "full") return EPF_CEILING_NEW;
+  return Math.round((EPF_CEILING_OLD * 16 + EPF_CEILING_NEW * 14) / 30);
+};
+
+const round2 = value => Number(value.toFixed(2));
+
 /**
  * Calculates statutory employee deductions and employer contributions.
  * @param {object} input Salary and policy inputs.
  * @returns {object} Statutory amounts.
  */
-const calculateStatutoryDeductions = ({ basic, fullBasic = basic, grossSalary, standardGross = grossSalary, taxCompliance = {}, ptState }) => {
+const calculateStatutoryDeductions = ({
+  basic,
+  fullBasic = basic,
+  grossSalary,
+  standardGross = grossSalary,
+  taxCompliance = {},
+  ptState,
+  year,
+  month,
+  epsEligible = true,
+}) => {
   const pfEnabled = taxCompliance.pfEnabled !== false;
-  const pfCeiling = taxCompliance.pfCeilingAmount ?? 15000;
+  const statutoryCeiling = year && month
+    ? getStatutoryPfCeiling(year, month, taxCompliance.pfSep2026Transition)
+    : EPF_CEILING_OLD;
+  // A stale policy value (15000) must not undercut the statutory ceiling.
+  const pfCeiling = Math.max(taxCompliance.pfCeilingAmount ?? 0, statutoryCeiling);
+  const payableShare = fullBasic > 0 ? basic / fullBasic : 0;
   const pfBase = taxCompliance.pfApplyOnActualBasic
     ? basic
-    : Math.min(fullBasic, pfCeiling) * (fullBasic > 0 ? basic / fullBasic : 0);
+    : Math.min(fullBasic, pfCeiling) * payableShare;
   const pfEmployee = pfEnabled
-    ? Number((pfBase * ((taxCompliance.pfEmployeeRate ?? 12) / 100)).toFixed(2))
+    ? round2(pfBase * ((taxCompliance.pfEmployeeRate ?? 12) / 100))
     : 0;
   const pfEmployer = pfEnabled
-    ? Number((pfBase * ((taxCompliance.pfEmployerRate ?? 12) / 100)).toFixed(2))
+    ? round2(pfBase * ((taxCompliance.pfEmployerRate ?? 12) / 100))
     : 0;
+
+  // P0-6: employer PF breakup. EPS is always on wages capped at the ceiling,
+  // even when PF is paid on actual basic; the rest of the 12% goes to EPF.
+  const epsWage = Math.min(pfBase, pfCeiling);
+  const eps = pfEnabled && epsEligible ? Math.round(epsWage * 0.0833) : 0;
+  const pfEmployerBreakup = pfEnabled
+    ? {
+      eps,
+      epf: round2(Math.max(0, pfEmployer - eps)),
+      edli: Math.round(epsWage * 0.005),
+      admin: Math.round(pfBase * 0.005),
+    }
+    : { eps: 0, epf: 0, edli: 0, admin: 0 };
 
   const esiEnabled = taxCompliance.esiEnabled !== false;
   const esiWageCeiling = taxCompliance.esiWageCeiling ?? 21000;
   const esiApplicable = esiEnabled && standardGross <= esiWageCeiling;
   const esiEmployee = esiApplicable
-    ? Number((grossSalary * ((taxCompliance.esiEmployeeRate ?? 0.75) / 100)).toFixed(2))
+    ? round2(grossSalary * ((taxCompliance.esiEmployeeRate ?? 0.75) / 100))
     : 0;
   const esiEmployer = esiApplicable
-    ? Number((grossSalary * ((taxCompliance.esiEmployerRate ?? 3.25) / 100)).toFixed(2))
+    ? round2(grossSalary * ((taxCompliance.esiEmployerRate ?? 3.25) / 100))
     : 0;
 
   const professionalTax = taxCompliance.ptEnabled === true && ptState
     ? calculatePT(ptState, grossSalary)
     : 0;
 
-  return { pfEmployee, pfEmployer, esiEmployee, esiEmployer, professionalTax };
+  return { pfEmployee, pfEmployer, pfEmployerBreakup, pfCeiling, esiEmployee, esiEmployer, professionalTax };
+};
+
+/**
+ * EPS stops at 58. Age is checked on the last day of the payroll month.
+ * @param {Date|string|undefined} dateOfBirth Employee DOB.
+ * @param {number} year Payroll year.
+ * @param {number} month Payroll month (1-12).
+ * @returns {boolean}
+ */
+const isEpsEligibleByAge = (dateOfBirth, year, month) => {
+  if (!dateOfBirth) return true;
+  const dob = new Date(dateOfBirth);
+  const periodEnd = new Date(Date.UTC(year, month, 0));
+  let age = periodEnd.getUTCFullYear() - dob.getUTCFullYear();
+  const beforeBirthday = periodEnd.getUTCMonth() < dob.getUTCMonth()
+    || (periodEnd.getUTCMonth() === dob.getUTCMonth() && periodEnd.getUTCDate() < dob.getUTCDate());
+  if (beforeBirthday) age--;
+  return age < 58;
+};
+
+/**
+ * P0-4: monthly TDS from the financial-year projection.
+ * Months left includes the current month (Apr = 12, Mar = 1).
+ * @param {object} input Prior FY earnings/TDS and current month figures.
+ * @returns {{projectedAnnualGross: number, remainingMonths: number, monthlyTDS: number}}
+ */
+const projectAnnualIncomeForTDS = ({ month, priorGross = 0, currentGross, monthlyGross }) => {
+  const remainingMonths = month >= 4 ? 16 - month : 4 - month;
+  const projectedAnnualGross = priorGross + currentGross + monthlyGross * (remainingMonths - 1);
+  return { projectedAnnualGross: round2(projectedAnnualGross), remainingMonths };
+};
+
+/**
+ * Spreads the tax still due over the months left in the FY.
+ * @param {number} annualTax Total tax on the projected income.
+ * @param {number} priorTDS TDS already deducted this FY.
+ * @param {number} remainingMonths Months left including the current one.
+ * @returns {number}
+ */
+const calculateMonthlyTDS = (annualTax, priorTDS, remainingMonths) => (
+  Math.max(0, Math.ceil((annualTax - priorTDS) / Math.max(remainingMonths, 1)))
+);
+
+/**
+ * Calendar periods (year, month) that come before this month in the same FY.
+ * @param {number} year Payroll year.
+ * @param {number} month Payroll month.
+ * @returns {Array<{year: number, month: number}>}
+ */
+const getPriorFinancialYearPeriods = (year, month) => {
+  const fyStartYear = month >= 4 ? year : year - 1;
+  const periods = [];
+  for (let y = fyStartYear, m = 4; y * 12 + m < year * 12 + month; m === 12 ? (y++, m = 1) : m++) {
+    periods.push({ year: y, month: m });
+  }
+  return periods;
 };
 
 /**
@@ -250,4 +362,9 @@ module.exports = {
   resolveProfessionalTaxState,
   calculateStatutoryDeductions,
   getFinancialYear,
+  getStatutoryPfCeiling,
+  isEpsEligibleByAge,
+  projectAnnualIncomeForTDS,
+  calculateMonthlyTDS,
+  getPriorFinancialYearPeriods,
 };
