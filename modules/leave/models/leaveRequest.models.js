@@ -178,22 +178,23 @@ leaveRequestSchema.virtual("isActionable").get(function () {
 });
 
 // ─── Pre-validation Hook ───────────────────────────────────
-leaveRequestSchema.pre("validate", function (next) {
+// Mongoose 9 passes no `next` to pre hooks — throw to fail validation
+leaveRequestSchema.pre("validate", function () {
   if (this.isHalfDay) {
     if (!this.session) {
-      return next(new Error("Session (FIRST_HALF/SECOND_HALF) is required for half day leave"));
+      throw new Error("Session (FIRST_HALF/SECOND_HALF) is required for half day leave");
     }
     const start = new Date(this.startDate);
     const end   = new Date(this.endDate);
     start.setHours(0, 0, 0, 0);
     end.setHours(0, 0, 0, 0);
     if (start.getTime() !== end.getTime()) {
-      return next(new Error("Start date and end date must be same for half day leave"));
+      throw new Error("Start date and end date must be same for half day leave");
     }
     this.totalDays = 0.5;
   }
   if (this.endDate < this.startDate) {
-    return next(new Error("End date cannot be before start date"));
+    throw new Error("End date cannot be before start date");
   }
   // next();
 });

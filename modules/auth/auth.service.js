@@ -70,6 +70,9 @@ const getRoleDisplayName = (roleSlug, structureLevel) => {
 // ─────────────────────────────────────────────────────────────
 // LOGIN
 // ─────────────────────────────────────────────────────────────
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_MINUTES = 15;
+
 exports.login = async (payload) => {
   const { email, password } = payload;
 
@@ -121,8 +124,30 @@ exports.login = async (payload) => {
     }).select("_id").lean();
     if (terminatedEmployee) throw new AppError("Account not active", 403);
 
+    // ── A-05: lock the account after repeated wrong passwords ──
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      const minutes = Math.ceil((user.lockUntil - new Date()) / 60000);
+      throw new AppError(`Too many failed login attempts. Try again in ${minutes} minute(s) or reset your password.`, 429);
+    }
+
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) throw new AppError("Invalid credentials", 401);
+    if (!isMatch) {
+      const attempts = (user.loginAttempts || 0) + 1;
+      const locked = attempts >= MAX_LOGIN_ATTEMPTS;
+      await User.updateOne(
+        { _id: user._id },
+        locked
+          ? { $set: { loginAttempts: 0, lockUntil: new Date(Date.now() + LOCK_MINUTES * 60000) } }
+          : { $set: { loginAttempts: attempts } }
+      );
+      if (locked) {
+        throw new AppError(`Too many failed login attempts. Your account is locked for ${LOCK_MINUTES} minutes.`, 429);
+      }
+      throw new AppError("Invalid credentials", 401);
+    }
+    if (user.loginAttempts || user.lockUntil) {
+      await User.updateOne({ _id: user._id }, { $set: { loginAttempts: 0 }, $unset: { lockUntil: 1 } });
+    }
 
     // ── MFA check ───────────────────────────────────────────
     if (user.mfaEnabled) {

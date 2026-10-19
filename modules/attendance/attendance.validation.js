@@ -20,6 +20,10 @@ exports.getMyAttendance = Joi.object({
   orgId: objectId.optional(),
   companyId: objectId.optional(),
   unit_id: objectId.optional(),
+  // AT-06 / BR-21: My Attendance status filter (was rejected with "'status' is not allowed")
+  status: Joi.string()
+    .valid("PRESENT", "ABSENT", "HALF_DAY", "ON_LEAVE", "HOLIDAY", "WEEKEND", "LATE", "WFH", "ALL", "")
+    .optional(),
 });
 
 // ─── POST /punch-in ───────────────────────────────────────────
@@ -129,11 +133,16 @@ exports.regularize = Joi.object({
     .optional()
     .allow(null),
 
-  checkOut: Joi.date()
-    .iso()
-    .min(Joi.ref("checkIn"))
+  // AT-07: compare with check-in only when a check-in is sent. A "missed punch-out"
+  // correction sends only checkOut, and Joi.ref("checkIn") then failed with
+  // '"checkOut" date references "ref:checkIn" which must have a valid date format'.
+  // The service still checks check-out against the saved check-in.
+  checkOut: Joi.when("checkIn", {
+    is: Joi.date().required(),
+    then: Joi.date().iso().min(Joi.ref("checkIn")).allow(null),
+    otherwise: Joi.date().iso().allow(null),
+  })
     .optional()
-    .allow(null)
     .messages({
       "date.min": "Check-out must be after check-in",
     }),

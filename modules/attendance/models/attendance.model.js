@@ -217,6 +217,19 @@ const attendanceSchema = new Schema(
       type: Date,
       default: null,
     },
+
+    // AT-09: every correction is logged so the employee / HR can see what changed and who did it
+    regularizationLog: [{
+      at:          { type: Date, default: Date.now },
+      by:          { type: Schema.Types.ObjectId, ref: "User" },
+      source:      { type: String, enum: ["ADMIN", "REQUEST"], default: "ADMIN" },
+      type:        { type: String, default: null },     // MISSED_PUNCH_OUT, WRONG_TIME, …
+      requestId:   { type: Schema.Types.ObjectId, default: null },
+      remarks:     { type: String, default: null },
+      before:      { status: String, checkIn: Date, checkOut: Date },
+      after:       { status: String, checkIn: Date, checkOut: Date },
+      _id: false,
+    }],
     isLWP: { type: Boolean, default: false },
 
     // ─── Shift Info (future-proofing) ─────────────────────────────

@@ -106,7 +106,8 @@ const payslipSchema = new mongoose.Schema({
   // LOP calculation details (for transparency in payslip)
   lopPerDayRate:     { type: Number, default: 0 },  // Actual per-day rate used for LOP deduction
   lopFormulaUsed:    { type: String, default: '' }, // Formula applied (e.g. 'monthly_salary/calendar_days')
-  lopFormulaDays:    { type: Number, default: 0 },  // Days divisor used (e.g. 31 for calendar_days, 23 for working_days)
+  lopFormulaDays:    { type: Number, default: 0 },
+  lopEnabled:        { type: Boolean, default: true }, // false = policy had LOP off; absences were not deducted  // Days divisor used (e.g. 31 for calendar_days, 23 for working_days)
   
   // Overtime calculation details
   overtimeRate:      { type: Number, default: 0 },  // Hourly rate for overtime

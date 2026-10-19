@@ -84,7 +84,8 @@ const renderPayslipPdf = payslip => new Promise((resolve, reject) => {
   addAmountRow(doc, "ESI", payslip.deductions?.esi);
   addAmountRow(doc, "TDS", payslip.deductions?.tds);
   addAmountRow(doc, "Professional tax", payslip.deductions?.professionalTax);
-  addAmountRow(doc, "Loss of pay", payslip.deductions?.lop);
+  // Only show LOP when something was actually deducted (it is off when the policy disables LOP)
+  if (Number(payslip.deductions?.lop) > 0) addAmountRow(doc, `Loss of pay (${payslip.lopDays || 0} days)`, payslip.deductions.lop);
   addAmountRow(doc, "Gross after LOP", payslip.grossAfterLOP);
 
   addSectionTitle(doc, "NET PAY");

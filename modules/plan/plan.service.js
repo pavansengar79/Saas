@@ -434,3 +434,68 @@ exports.getMyFeatures = async (user) => {
     allModuleKeys:  ALL_MODULE_KEYS,
   };
 };
+// ─────────────────────────────────────────────────────────────
+// CONTACT SALES — "Request quote" for a custom (Enterprise) plan
+// ─────────────────────────────────────────────────────────────
+exports.contactSales = async (body = {}, user = {}) => {
+  const mongoose = require("mongoose");
+  const PlanQuoteRequest = require("./models/planQuoteRequest.model");
+  const { sendEmail } = require("../../utils/email/email");
+
+  const { planId, billingCycle = "monthly" } = body;
+  if (!planId || !mongoose.isValidObjectId(planId)) throw new AppError("planId is required", 400);
+  if (!["monthly", "annual"].includes(billingCycle)) throw new AppError("billingCycle must be monthly or annual", 400);
+  const message = typeof body.message === "string" ? body.message.trim().slice(0, 2000) : null;
+  const phone = typeof body.phone === "string" ? body.phone.trim().slice(0, 30) : null;
+
+  const plan = await Plan.findOne({ _id: planId, is_deleted: false }).select("name").lean();
+  if (!plan) throw new AppError("Plan not found", 404);
+
+  let account = null;
+  if (user.userId) {
+    const User = require("../auth/models/user.model");
+    account = await User.findById(user.userId).select("name email").lean();
+  }
+
+  // One open request per user and plan is enough
+  const existing = user.userId
+    ? await PlanQuoteRequest.findOne({ userId: user.userId, plan_id: plan._id, status: "NEW" })
+    : null;
+  if (existing) return existing;
+
+  const request = await PlanQuoteRequest.create({
+    plan_id: plan._id,
+    billingCycle,
+    userId: user.userId || null,
+    name: account?.name || user.name || null,
+    email: account?.email || user.email || null,
+    phone,
+    message,
+    org_id: user.orgId || null,
+    company_id: user.companyId || null,
+  });
+
+  const salesEmail = process.env.SALES_EMAIL || process.env.SUPER_ADMIN_EMAIL;
+  if (salesEmail) {
+    sendEmail({
+      to: salesEmail,
+      subject: `Quote request: ${plan.name} (${billingCycle})`,
+      html: `<p><strong>${request.name || "A customer"}</strong> (${request.email || "no email"}) requested a quote for
+        <strong>${plan.name}</strong>, billed ${billingCycle}.</p>
+        ${phone ? `<p>Phone: ${phone}</p>` : ""}${message ? `<p>Message: ${message}</p>` : ""}
+        <p>Request ID: ${request._id}</p>`,
+    }).catch(error => console.error("[contactSales] email failed:", error.message));
+  }
+  return request;
+};
+
+exports.getQuoteRequests = async (query = {}) => {
+  const PlanQuoteRequest = require("./models/planQuoteRequest.model");
+  const filter = {};
+  if (["NEW", "CONTACTED", "CLOSED"].includes(query.status)) filter.status = query.status;
+  return PlanQuoteRequest.find(filter)
+    .populate("plan_id", "name")
+    .sort({ createdAt: -1 })
+    .limit(Math.min(Number(query.limit) || 50, 200))
+    .lean();
+};

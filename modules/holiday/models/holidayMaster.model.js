@@ -21,7 +21,7 @@ const holidayMasterSchema = new mongoose.Schema(
 
     type: {
       type:    String,
-      enum:    ["NATIONAL", "OPTIONAL"],
+      enum:    ["NATIONAL", "OPTIONAL", "REGIONAL", "RELIGIOUS", "COMPANY"],
       default: "NATIONAL",
     },
 

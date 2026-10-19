@@ -813,8 +813,18 @@ exports.punchOut = async (data, user) => {
 // GET /hrms/me/attendance?month=YYYY-MM
 // ─────────────────────────────────────────────────────────────────────────────
 
+// AT-06: status filter matches the same flags the summary counts
+// (LATE = punched in late, WFH = worked from home, PRESENT = attended).
+const matchesStatusFilter = (record, status) => {
+  if (!status || status === "ALL") return true;
+  const flags = attendanceFlags(record);
+  const byFlag = { PRESENT: flags.present, ABSENT: flags.absent, LATE: flags.late, WFH: flags.wfh, HALF_DAY: flags.halfDay, ON_LEAVE: flags.onLeave };
+  return status in byFlag ? byFlag[status] : record.status === status;
+};
+exports.matchesStatusFilter = matchesStatusFilter;
+
 exports.getMyAttendance = async (query, user) => {
-  const { month } = query;
+  const { month, status } = query;
   const config = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone').lean();
   const { start, end, year, month: monthNum } = parseMonth(month, config?.timezone);
 
@@ -830,6 +840,7 @@ exports.getMyAttendance = async (query, user) => {
     isDeleted: false,
   })
     .sort({ date: 1 })
+    .populate("regularizedBy", "name") // AT-09: show who regularized the day
     .select("-__v -isDeleted");
 
   // ── 3. Build summary ─────────────────────────────────────────
@@ -876,7 +887,8 @@ exports.getMyAttendance = async (query, user) => {
     month,
     year,
     summary,
-    records,
+    // summary always covers the whole month; only the list is filtered
+    records: status ? records.filter(record => matchesStatusFilter(record, status)) : records,
   };
 };
 
@@ -1128,8 +1140,8 @@ exports.getAllAttendance = async (query, user) => {
     filter.date = { $gte: start, $lt: end };
   }
 
-  // Employee-specific filters
-  if (employeeId) {
+  // Employee-specific filters (employee + department together = both must match)
+  if (employeeId && !departmentId) {
     filter.employeeId = employeeId;
   } else if (departmentId) {
     // If department filter is applied, find employees in that department first
@@ -1143,8 +1155,9 @@ exports.getAllAttendance = async (query, user) => {
       status: "ACTIVE"
     }).select("_id");
     
-    if (deptEmployees.length > 0) {
-      filter.employeeId = { $in: deptEmployees.map(e => e._id) };
+    const deptIds = deptEmployees.map(e => e._id).filter(id => !employeeId || String(id) === String(employeeId));
+    if (deptIds.length > 0) {
+      filter.employeeId = { $in: deptIds };
     } else {
       // No employees in this department - return empty result
       return {
@@ -1165,7 +1178,8 @@ exports.getAllAttendance = async (query, user) => {
     orgId, companyId, unitId,
     employeeFilter: filter.employeeId,
     rangeStart: filter.date.$gte,
-    rangeEnd:   rangeEndRaw < todayEnd ? rangeEndRaw : todayEnd,
+    // AT-06 On Leave filter: approved leave on a future date is still "On Leave" for that date
+    rangeEnd:   status === "ON_LEAVE" || rangeEndRaw < todayEnd ? rangeEndRaw : todayEnd,
     tz: ORG_TZ,
   });
 
@@ -1230,6 +1244,7 @@ exports.getAllAttendance = async (query, user) => {
     Attendance.find(filter)
       .populate("employeeId", "name employeeId email departmentId profilePhoto")
       .populate("leaveRequestId", "leaveTypeId isHalfDay session")
+      .populate("regularizedBy", "name")
       .sort({ date: -1, createdAt: -1 })
       .skip(synthetic.length ? 0 : skip)
       .limit(synthetic.length ? skip + limitNum : limitNum)
@@ -1577,6 +1592,7 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
   }
 
   // ── 3. Apply changes ──────────────────────────────────────────
+  const before = { status: record.status, checkIn: record.checkIn, checkOut: record.checkOut };
   record.status          = status;
   record.remarks         = remarks;
   record.isRegularized   = true;
@@ -1594,8 +1610,21 @@ exports.regularize = async (attendanceId, data, user, query = {}) => {
       config, policyForHours);
   }
 
+  // AT-09: keep an audit entry for the correction
+  record.regularizationLog = record.regularizationLog || [];
+  record.regularizationLog.push({
+    at: record.regularizedAt,
+    by: user.userId,
+    source: "ADMIN",
+    type: regularizationType,
+    remarks,
+    before,
+    after: { status: record.status, checkIn: record.checkIn, checkOut: record.checkOut },
+  });
+
   await record.save();
   await record.populate("employeeId", "name employeeId email departmentId profilePhoto");
+  await record.populate("regularizedBy", "name email");
 
   return record;
 };

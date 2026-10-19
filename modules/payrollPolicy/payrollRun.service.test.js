@@ -408,3 +408,23 @@ test("P0-5/P0-6 October 2026 PF uses the 25,000 ceiling and stores the employer 
     attendanceTotals = { present: 5, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
   }
 });
+
+test("LOP disabled in the payroll policy: no LOP days, no deduction, all eligible days payable", async () => {
+  const originalJoiningDate = employee.joiningDate;
+  const originalEndDay = policy.salaryCycle.endDay;
+  employee.joiningDate = new Date("2025-01-01T00:00:00.000Z");
+  policy.salaryCycle.endDay = 31;
+  policy.lop.enabled = false;
+  attendanceTotals = { present: 10, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  try {
+    const payslip = await runForEmployee(employeeId, companyId, unitId, "2026-10", { orgId: organizationId });
+    assert.equal(payslip.lopDays, 0);
+    assert.equal(payslip.deductions.lop, 0);
+    assert.equal(payslip.lopEnabled, false);
+  } finally {
+    employee.joiningDate = originalJoiningDate;
+    policy.salaryCycle.endDay = originalEndDay;
+    delete policy.lop.enabled;
+    attendanceTotals = { present: 5, halfDay: 0, onLeave: 0, holiday: 0, overtimeHours: 0 };
+  }
+});
