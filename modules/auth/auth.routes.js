@@ -1,7 +1,7 @@
 const express = require('express');
 const authController = require('./auth.controller');
 const authMiddleware = require('../../middlewares/auth.middleware');
-const authLimiter = require("../../middlewares/rateLimiter.middleware").authLimiter;
+const { authLimiter, loginLimiter } = require("../../middlewares/rateLimiter.middleware");
 const router = express.Router();
 const validate = require("../../middlewares/validate.middleware");
 const { superAdminLoginSchema } = require("../../validations/auth.validations");
@@ -10,7 +10,7 @@ const { tenantLoginSchema } = require("../../validations/auth.validations");
 
 // router.post("/super-admin/login", authLimiter, validate(superAdminLoginSchema), authController.superAdminLogin);
 // router.post("/tenant/login",authLimiter,validate(tenantLoginSchema),authController.tenantlogin);
-router.post("/login", validate(tenantLoginSchema), authController.login);
+router.post("/login", loginLimiter, validate(tenantLoginSchema), authController.login);
 const passport = require("passport");
 const { authenticate } = require("../../middlewares/auth.middleware");
 const { resolveCallbackUrl, buildRedirect } = require("./google.redirect");

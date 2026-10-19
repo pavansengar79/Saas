@@ -48,6 +48,7 @@ test('self attendance detail and summary use the same tenant and month filter', 
       detailFilter = filter;
       return {
         sort() { return this; },
+        populate() { return this; },
         select: async () => [],
       };
     };

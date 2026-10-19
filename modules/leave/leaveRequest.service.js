@@ -668,7 +668,9 @@ exports.getAllLeaveRequests = async (query, user) => {
   } else {
     if (user.unitId)  filter.unit_id    = user.unitId;
     
-    // Department filter - find all employees in the department
+    // BR-17: employee and department filters work together (AND).
+    // Before, an employee filter was ignored whenever a department was selected.
+    const empty = { requests: [], pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 } };
     if (departmentId) {
       const deptEmployees = await Employee.find({ 
         departmentId: toObjId(departmentId),
@@ -676,18 +678,13 @@ exports.getAllLeaveRequests = async (query, user) => {
         company_id: user.companyId,
         isDeleted: false 
       }).distinct('_id');
-      
-      if (deptEmployees.length > 0) {
-        filter.employeeId = { $in: deptEmployees };
-      } else {
-        // No employees in this department, return empty result
-        return {
-          requests: [],
-          pagination: { total: 0, page: Number(page), limit: Number(limit), pages: 0 }
-        };
-      }
+
+      const ids = employeeId
+        ? deptEmployees.filter(id => String(id) === String(employeeId))
+        : deptEmployees;
+      if (!ids.length) return empty;
+      filter.employeeId = { $in: ids };
     } else if (employeeId) {
-      // Employee filter (only if department not specified)
       filter.employeeId = toObjId(employeeId);
     }
   }
@@ -1510,78 +1507,59 @@ exports.updateLeaveStatus = async (id, payload, user) => {
 //   - L2 (HR Manager) sees requests where l2ApproverId matches AND l1Status is APPROVED AND l2Status is PENDING/null
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getPendingApprovals = async (query, user) => {
-  console.log('[getPendingApprovals] called for user:', user.userId, 'role:', user.role);
   const { page = 1, limit = 10 } = query;
 
-  const isHRManager = ["hr_manager", "company_hr_manager", "unit_admin", "org_admin", "company_admin"].includes(user.role);
-  console.log('[getPendingApprovals] isHRManager:', isHRManager);
+  // L-05 / DB-02: this queue must show exactly what this user is allowed to
+  // approve in updateLeaveStatus. Before, HR / unit admins only saw requests
+  // already approved at L1 (UNDER_REVIEW), so a PENDING request shown on the
+  // dashboard with Approve/Reject was missing here.
+  const isAdminLevel = ["SUPER_ADMIN", "org_admin", "company_admin"].includes(user.role);
+  const isHRManager = ["hr_manager", "company_hr_manager", "unit_admin", "hr", "HR", "hr-admin"].includes(user.role);
 
-  const managerEmployee = await Employee.findOne({ userId: user.userId, isDeleted: false }).select("_id");
-  const isReportingManager = managerEmployee
-    ? !!(await Employee.exists({ reportingManagerId: managerEmployee._id, isDeleted: false, status: "ACTIVE" }))
-    : false;
-  console.log('[getPendingApprovals] isReportingManager:', isReportingManager, 'managerEmployeeId:', managerEmployee?._id);
-
-  if (!isHRManager && !isReportingManager) {
-    console.error('[getPendingApprovals] Authorization failed - user is neither HR nor Reporting Manager');
-    throw new AppError("You are not authorized to view pending approvals", 403);
+  let canApproveL1 = false;
+  let canApproveL2 = false;
+  if (user.roleId) {
+    const role = await Role.findById(user.roleId).populate("permissions", "slug").lean();
+    const slugs = new Set((role?.permissions || []).map(permission => permission.slug));
+    canApproveL1 = slugs.has("leave.approve") || slugs.has("leave.approve.l1");
+    canApproveL2 = slugs.has("leave.approve") || slugs.has("leave.approve.l2");
   }
+  const seesAllPending = isAdminLevel || isHRManager || canApproveL1;     // can act on PENDING (L1 backup)
+  const seesAllUnderReview = isAdminLevel || isHRManager || canApproveL2; // can act on UNDER_REVIEW
 
   const filter = {
     org_id:     user.orgId,
     company_id: user.companyId,
-    status:     { $in: ["PENDING", "UNDER_REVIEW"] },
     isDeleted:  false,
   };
+  if (user.unitId && !isAdminLevel) filter.unit_id = user.unitId;
 
-  // ── SELF-APPROVAL PREVENTION ─────────────────────────────
-  // Exclude requests created by the approver (compliance requirement)
   // Users cannot approve their own leave requests
-  const isSuperAdmin = user.role === "SUPER_ADMIN";
-  if (!isSuperAdmin) {
-    filter.userId = { $ne: user.userId };
-    console.log('[getPendingApprovals] Excluding self-created requests for user:', user.userId);
-  }
+  if (user.role !== "SUPER_ADMIN") filter.userId = { $ne: user.userId };
 
-  // ── SEQUENTIAL APPROVAL FILTER ─────────────────────────────
-  // HR Manager sees all requests in their unit/company
-  // FIXED: Admin can see ALL UNDER_REVIEW leaves even if L1=L2 conflict
-  const isAdminLevel = ["org_admin", "company_admin", "SUPER_ADMIN"].includes(user.role);
-  
-  if (isHRManager) {
-    console.log('[getPendingApprovals] User is HR Manager, setting L2 filter');
-    if (user.unitId) {
-      filter.unit_id = user.unitId;
+  const pendingL1 = { status: "PENDING", l1Status: { $in: ["PENDING", null] } };
+  const pendingL2 = { status: "UNDER_REVIEW", l2Status: { $in: ["PENDING", null] } };
+  filter.$or = [
+    seesAllPending ? pendingL1 : { ...pendingL1, l1ApproverId: user.userId },
+    seesAllUnderReview
+      ? pendingL2
+      // the L1 approver may finish a request that has no L2 approver
+      : { $or: [{ ...pendingL2, l2ApproverId: user.userId }, { ...pendingL2, l2ApproverId: null, l1ApproverId: user.userId }] },
+  ];
+
+  if (!seesAllPending && !seesAllUnderReview) {
+    const managerEmployee = await Employee.findOne({ userId: user.userId, isDeleted: false }).select("_id").lean();
+    const isReportingManager = managerEmployee
+      ? !!(await Employee.exists({ reportingManagerId: managerEmployee._id, isDeleted: false, status: "ACTIVE" }))
+      : false;
+    const isAssignedApprover = !!(await LeaveRequest.exists({
+      $or: [{ l1ApproverId: user.userId }, { l2ApproverId: user.userId }],
+      status: { $in: ["PENDING", "UNDER_REVIEW"] },
+      isDeleted: false,
+    }));
+    if (!isReportingManager && !isAssignedApprover) {
+      throw new AppError("You are not authorized to view pending approvals", 403);
     }
-    
-    // FIXED: Show UNDER_REVIEW leaves even if L1=L2 (role conflict) or l2ApproverId not assigned
-    if (isAdminLevel) {
-      // Admin sees ALL UNDER_REVIEW requests for oversight (including L1=L2 conflicts)
-      filter.$or = [
-        // Case 1: Explicitly assigned as L2 approver
-        { l2ApproverId: user.userId, l1Status: "APPROVED", l2Status: { $in: ["PENDING", null] } },
-        // Case 2: No L2 assigned - any Admin can approve
-        { l2ApproverId: null, l1Status: "APPROVED", status: "UNDER_REVIEW" },
-        // Case 3: L1=L2 same person (role conflict) - Admin can step in
-        { l1ApproverId: user.userId, l2ApproverId: user.userId, l1Status: "APPROVED", status: "UNDER_REVIEW" },
-        // Case 4: Any UNDER_REVIEW request (admin oversight - broadest access)
-        { status: "UNDER_REVIEW", l1Status: "APPROVED" }
-      ];
-      console.log('[getPendingApprovals] Admin L2 filter (includes all UNDER_REVIEW):', JSON.stringify(filter, null, 2));
-    } else {
-      // Regular HR Manager - assigned requests and fallback
-      filter.$or = [
-        { l2ApproverId: user.userId, l1Status: "APPROVED", l2Status: { $in: ["PENDING", null] } },
-        { l2ApproverId: null, l1Status: "APPROVED", status: "UNDER_REVIEW" }
-      ];
-      console.log('[getPendingApprovals] L2 filter:', JSON.stringify(filter, null, 2));
-    }
-  } else if (isReportingManager) {
-    // L1 (Reporting Manager) only sees requests pending L1 approval
-    console.log('[getPendingApprovals] User is Reporting Manager, setting L1 filter');
-    filter.l1ApproverId = user.userId;
-    filter.l1Status = { $in: ["PENDING", null] };
-    console.log('[getPendingApprovals] L1 filter:', JSON.stringify(filter, null, 2));
   }
 
   const skip  = (Number(page) - 1) * Number(limit);
@@ -1595,8 +1573,6 @@ exports.getPendingApprovals = async (query, user) => {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(Number(limit));
-
-  console.log('[getPendingApprovals] Returning', requests.length, 'requests');
 
   return {
     requests,

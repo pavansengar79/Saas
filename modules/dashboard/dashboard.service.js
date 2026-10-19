@@ -35,8 +35,10 @@ const toObjId = (id) => new mongoose.Types.ObjectId(id);
 // Create date range based on ORGANIZATION TIMEZONE (not server timezone)
 // CRITICAL FIX: Use same date generation method as attendance service
 // Attendance records use getTodayDateInOrgTimezone() which calls moment().tz().startOf('day').toDate()
-const todayRange = (timezone = 'Asia/Kolkata') => {
-  const now = moment.tz(timezone);
+// Dashboard date filter: `date` (YYYY-MM-DD) picks the day shown as "today";
+// without it the real today in the org timezone is used.
+const todayRange = (timezone = 'Asia/Kolkata', dateStr = null) => {
+  const now = isDateString(dateStr) ? moment.tz(dateStr, 'YYYY-MM-DD', timezone) : moment.tz(timezone);
   console.log('[todayRange] Current time in', timezone, ':', now.format('YYYY-MM-DD HH:mm:ss Z'));
   
   // Get the date string in org timezone (e.g., "2026-08-24")
@@ -54,6 +56,25 @@ const todayRange = (timezone = 'Asia/Kolkata') => {
   
   return { start, end, dateString: todayDateString };
 };
+
+const isDateString = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  && moment(value, 'YYYY-MM-DD', true).isValid();
+const isMonthString = value => typeof value === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+
+// Day used for the "today" cards: the selected date; for a past/future month without a
+// date, that month's last day — so picking another month changes every card, not one chart.
+const selectedDay = (query, timezone) => {
+  if (isDateString(query.date)) return query.date;
+  if (isMonthString(query.month) && query.month !== currentMonthStr(timezone)) {
+    return moment.tz(`${query.month}-01`, 'YYYY-MM-DD', timezone).endOf('month').format('YYYY-MM-DD');
+  }
+  return null;
+};
+
+// month param wins; otherwise the month of the selected date; otherwise this month
+const selectedMonth = (query, timezone) => (isMonthString(query.month)
+  ? query.month
+  : isDateString(query.date) ? query.date.slice(0, 7) : currentMonthStr(timezone));
 
 const monthRange = (monthStr, timezone) => {
   const { start, end } = orgMonthRange(monthStr, timezone);
@@ -334,6 +355,7 @@ exports.getCompanyDashboard = async (user, query = {}) => {
 
 exports.getUnitDashboard = async (user, query = {}) => {
   const { orgId } = user;
+  let unitCreatedAt = null;
 
   console.log('[getUnitDashboard] CALLED - user.role:', user.role, 'user.unitId:', user.unitId, 'query:', query);
 
@@ -366,6 +388,7 @@ exports.getUnitDashboard = async (user, query = {}) => {
     if (!unit) throw new AppError("Unit not found", 404);
 
     companyId = unit.company_id;
+    unitCreatedAt = unit.createdAt || null;
   } else {
     console.log('[getUnitDashboard] Role NOT in allowed list, throwing 403');
     throw new AppError("Access denied", 403);
@@ -377,10 +400,16 @@ exports.getUnitDashboard = async (user, query = {}) => {
     .lean();
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
-  const month = query.month || currentMonthStr(timezone);
-  const { start: monthStart, end: monthEnd } = monthRange(month, timezone);
-  
-  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
+  const month = selectedMonth(query, timezone);
+  const { start: monthStartRaw, end: monthEnd } = monthRange(month, timezone);
+
+  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone, selectedDay(query, timezone));
+
+  // Dashboard date filter: nothing is shown for days before this unit existed
+  const scopeStart = unitCreatedAt ? moment(unitCreatedAt).tz(timezone).startOf('day').toDate() : null;
+  const monthStart = scopeStart && scopeStart > monthStartRaw ? scopeStart : monthStartRaw;
+  const periodBeforeUnitCreated = !!scopeStart && monthEnd < scopeStart;
+  const dayBeforeUnitCreated = !!scopeStart && todayEnd < scopeStart;
 
   console.log('[getUnitDashboard] AFTER todayRange call:', {
     timezone,
@@ -396,6 +425,16 @@ exports.getUnitDashboard = async (user, query = {}) => {
   // - Users: Administrative accounts (org_admin, company_admin, unit_admin, hr_manager, manager)
   // - Employees: Workforce managed separately via Employee collection
   const employeeRole = await Role.findOne({ slug: "employee" }).select("_id").lean();
+
+  const unitPendingLeaveFilter = {
+    org_id:     orgId,
+    company_id: companyId,
+    unit_id:    unitId,
+    status:     { $in: ["PENDING", "UNDER_REVIEW"] },
+    isDeleted:  false,
+    userId:     { $ne: user.userId },
+  };
+  const pendingLeaveTotal = await LeaveRequest.countDocuments(unitPendingLeaveFilter);
 
   const [userStats, deptCount, desigCount, employeeCount, todayAtt, pendingLeaves, recentUsers, upcomingHols, roleCount, roleList, recentActivityUsers, recentLeaves, monthAtt] = await Promise.all([
 
@@ -422,17 +461,12 @@ exports.getUnitDashboard = async (user, query = {}) => {
 
     Employee.countDocuments({ org_id: orgId, company_id: companyId, unit_id: unitId, status: 'ACTIVE', isDeleted: false }),
 
-    Attendance.find({ org_id: orgId, company_id: companyId, unit_id: unitId,
+    dayBeforeUnitCreated ? Promise.resolve([]) : Attendance.find({ org_id: orgId, company_id: companyId, unit_id: unitId,
       date: { $gte: todayStart, $lte: todayEnd }, isDeleted: false })
       .select('employeeId status checkIn isLate isWFH').lean(),
 
-    LeaveRequest.find({
-      org_id:     orgId,
-      company_id: companyId,
-      unit_id:    unitId,
-      status:     "PENDING",
-      isDeleted:  false,
-    })
+    // DB-02: same set as the Pending Approval queue (PENDING + UNDER_REVIEW, not own requests)
+    LeaveRequest.find(unitPendingLeaveFilter)
       .sort({ createdAt: -1 })
       .limit(5)
       .populate("employeeId", "name employeeId")
@@ -692,7 +726,10 @@ exports.getUnitDashboard = async (user, query = {}) => {
       totalWorkingHours:  parseFloat((mAtt.totalWorkingHours  || 0).toFixed(2)),
       totalOvertimeHours: parseFloat((mAtt.totalOvertimeHours || 0).toFixed(2)),
     },
-    pendingLeaveCount: pendingLeaves.length,
+    pendingLeaveCount: pendingLeaveTotal, // was the length of a 5-item list
+    selectedDate: todayDateString,
+    selectedMonth: month,
+    periodBeforeUnitCreated,
     pendingLeaves: pendingLeaves.map((l) => ({
       id:        l._id,
       employee:  { id: l.employeeId?._id, name: l.employeeId?.name, employeeId: l.employeeId?.employeeId },
@@ -731,11 +768,11 @@ exports.getEmployeeDashboard = async (user, query = {}) => {
     .lean();
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
-  const month = query.month || currentMonthStr(timezone);
+  const month = selectedMonth(query, timezone);
   const [yr, mon] = month.split("-").map(Number);
   const year = yr; // Use year from month parameter, not current year
   const { start: monthStart, end: monthEnd } = monthRange(month, timezone);
-  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
+  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone, selectedDay(query, timezone));
 
   const employee = await Employee.findOne({
     userId,
@@ -908,9 +945,9 @@ exports.getManagerDashboard = async (user, query = {}) => {
     .lean();
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
-  const month = query.month || currentMonthStr(timezone);
+  const month = selectedMonth(query, timezone);
   const { start: monthStart, end: monthEnd } = monthRange(month, timezone);
-  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone);
+  const { start: todayStart, end: todayEnd, dateString: todayDateString } = todayRange(timezone, selectedDay(query, timezone));
 
   // 1. Get manager's employee record
   const managerEmployee = await Employee.findOne({

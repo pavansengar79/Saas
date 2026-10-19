@@ -313,15 +313,14 @@ attendancePolicySchema.virtual("isActive").get(function () {
 });
 
 // ─── Pre-save Hook ────────────────────────────────────────────────────────────
-attendancePolicySchema.pre("save", function (next) {
+// Mongoose 9 passes no `next` to pre hooks — throw to fail the save
+attendancePolicySchema.pre("save", function () {
   // halfDayMinHours must be less than minimumHours
   if (
     this.shift &&
     this.shift.halfDayMinHours >= this.shift.minimumHours
   ) {
-    return next(
-      new Error("shift.halfDayMinHours must be less than shift.minimumHours")
-    );
+    throw new Error("shift.halfDayMinHours must be less than shift.minimumHours");
   }
   // next();
 });

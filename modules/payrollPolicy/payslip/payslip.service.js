@@ -187,7 +187,7 @@ exports.getPayslipById = async (id, user) => {
   const [attendance, holidays, leaves, config, employee] = await Promise.all([
     Attendance.find({ ...scope, employeeId, date: { $gte: start, $lte: end } }).select("date status isLWP").lean(),
     Holiday.find({ ...scope, $or: [{ unit_id: payslip.unit_id || null }, { unit_id: null }],
-      date: { $gte: start, $lte: end }, type: { $in: ["NATIONAL", "COMPANY"] }, isActive: true, isDeleted: false })
+      date: { $gte: start, $lte: end }, type: { $in: ["NATIONAL", "COMPANY", "REGIONAL", "RELIGIOUS"] }, isActive: true, isDeleted: false })
       .select("date name").lean(),
     LeaveRequest.find({ ...scope, employeeId, status: "APPROVED", startDate: { $lte: end }, endDate: { $gte: start } })
       .select("startDate endDate isHalfDay leaveTypeId").lean(),

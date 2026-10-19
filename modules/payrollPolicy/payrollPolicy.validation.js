@@ -6,7 +6,11 @@ const objectId = Joi.string()
 
 // ─── Salary Cycle ─────────────────────────────────────────────────────────────
 const salaryCycleSchema = Joi.object({
-  type:             Joi.string().valid("monthly").default("monthly"),
+  // Only monthly payroll is supported by the payroll engine today. Say so clearly
+  // instead of the generic '"salaryCycle.type" must be [monthly]'.
+  type:             Joi.string().valid("monthly").default("monthly").messages({
+    "any.only": "Only a monthly salary cycle is supported right now. Weekly / bi-weekly payroll is not available yet.",
+  }),
   startDay:         Joi.number().integer().min(1).max(31).default(1),
   endDay:           Joi.number().integer().min(1).max(31).default(31),
   salaryDate:       Joi.number().integer().min(1).max(31).default(1),

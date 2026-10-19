@@ -75,6 +75,9 @@ const recalculateAttendance = async (request, approvedBy) => {
     date,
   });
 
+  const before = attendance
+    ? { status: attendance.status, checkIn: attendance.checkIn, checkOut: attendance.checkOut }
+    : { status: null, checkIn: null, checkOut: null };
   const checkIn  = request.requestedCheckIn  || (attendance?.checkIn  || null);
   const checkOut = request.requestedCheckOut || (attendance?.checkOut || null);
 
@@ -160,6 +163,19 @@ const recalculateAttendance = async (request, approvedBy) => {
       attendance.isLWP  = true;  // The attendance model also needs this field
     }
   }
+
+  // AT-09: audit entry so the attendance log shows the day was regularized
+  attendance.regularizationLog = attendance.regularizationLog || [];
+  attendance.regularizationLog.push({
+    at: attendance.regularizedAt || new Date(),
+    by: toObjId(approvedBy),
+    source: "REQUEST",
+    type: request.regularizationType || request.type || null,
+    requestId: request._id,
+    remarks: request.reason || null,
+    before,
+    after: { status: attendance.status, checkIn: attendance.checkIn, checkOut: attendance.checkOut },
+  });
 
   await attendance.save();
   return attendance;

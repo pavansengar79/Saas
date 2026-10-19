@@ -24,6 +24,30 @@ exports.getPlanById = async (req, res, next) => {
   }
 };
 
+// POST /plans/contact-sales — { planId, billingCycle?, message?, phone? }
+exports.contactSales = async (req, res, next) => {
+  try {
+    const request = await planService.contactSales(req.body, req.user);
+    return res.status(201).json({
+      success: true,
+      message: "Thanks! Our team will contact you within 24 hours.",
+      data: { id: request._id, status: request.status },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /plans/quote-requests?status=NEW — super admin inbox
+exports.getQuoteRequests = async (req, res, next) => {
+  try {
+    const data = await planService.getQuoteRequests(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // ── Super Admin ───────────────────────────────────────────────
 
 // GET /plans

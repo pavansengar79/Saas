@@ -246,9 +246,10 @@ leavePolicySchema.virtual("activeLeaveTypes").get(function () {
 });
 
 // --- Pre-save Hook -----------------------------------------------------------
-leavePolicySchema.pre("save", function (next) {
+// Mongoose 9 passes no `next` to pre hooks — throw to fail the save
+leavePolicySchema.pre("save", function () {
   if (this.effectiveTo && this.effectiveTo <= this.effectiveFrom) {
-    return next(new Error("effectiveTo must be after effectiveFrom"));
+    throw new Error("effectiveTo must be after effectiveFrom");
   }
   // next();
 });

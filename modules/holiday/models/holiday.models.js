@@ -46,8 +46,9 @@ const holidayCalendarSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: {
-        values:  ["NATIONAL", "COMPANY", "OPTIONAL"],
-        message: "Type must be NATIONAL, COMPANY, or OPTIONAL",
+        // The app offers Regional and Religious holidays too — they were rejected before
+        values:  ["NATIONAL", "COMPANY", "OPTIONAL", "REGIONAL", "RELIGIOUS"],
+        message: "Type must be NATIONAL, COMPANY, REGIONAL, RELIGIOUS or OPTIONAL",
       },
       required: [true, "Holiday type is required"],
     },

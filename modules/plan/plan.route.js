@@ -21,6 +21,10 @@ router.get("/my-features", authenticate, controller.getMyFeatures);
 // Shows full plan info including modules and features
 router.get("/my-plan", authenticate, controller.getMyPlan);
 
+// ── "Request quote" for a custom (Enterprise) plan — was "Route not found" ──
+router.post("/contact-sales", authenticate, controller.contactSales);
+router.get("/quote-requests", authenticate, authorizeRoles("SUPER_ADMIN"), controller.getQuoteRequests);
+
 // ── Super Admin only ──────────────────────────────────────────
 router.get(   "/",    authenticate, authorizeRoles("SUPER_ADMIN"), controller.getAllPlans);
 router.post(  "/",    authenticate, authorizeRoles("SUPER_ADMIN"), controller.createPlan);

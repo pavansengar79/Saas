@@ -45,13 +45,16 @@ const parseMonth = (monthStr) => {
   return { year, month, start, end };
 };
 
+// Optional (restricted) holidays are not paid days off; all other holiday types are
+const PAID_HOLIDAY_TYPES = ["NATIONAL", "COMPANY", "REGIONAL", "RELIGIOUS"];
+
 const getUnrecordedHolidayDays = async (employee, company_id, start, end, timezone, workDayNumbers) => {
   const holidays = await Holiday.find({
     org_id: employee.org_id,
     company_id,
     $or: [{ unit_id: employee.unit_id || null }, { unit_id: null }],
     date: { $gte: start, $lte: end },
-    type: { $in: ["NATIONAL", "COMPANY"] },
+    type: { $in: PAID_HOLIDAY_TYPES },
     isActive: true,
     isDeleted: false,
   }).select("date").lean();
@@ -203,8 +206,9 @@ const calculateForEmployee = async (
   const regularDaysPresent = att.present + att.halfDay + att.onLeave + att.holiday + unrecordedPaidLeave + unrecordedHoliday.credit;
   const extraDaysWorked = (att.weekendWorked || 0) + (att.weekendHalfDay || 0);
   const daysPresent = regularDaysPresent + extraDaysWorked;
+  const lopEnabled = policy?.lop?.enabled !== false;
   const daysPayable = Math.min(eligibleWorkingDays, regularDaysPresent) + extraDaysWorked;
-  const lopDays = policy?.lop?.enabled === false ? 0 : Math.max(0, eligibleWorkingDays - regularDaysPresent);
+  const lopDays = lopEnabled ? Math.max(0, eligibleWorkingDays - regularDaysPresent) : 0;
   const earningsFactor = proRataFactor + (salaryDivisorDays ? extraDaysWorked / salaryDivisorDays : 0);
 
   const salary = employee.salary;
@@ -506,6 +510,7 @@ const calculateForEmployee = async (
     lopPerDayRate:     parseFloat((isHourlyLOP ? hourlyRate * standardHours : dailySalary).toFixed(2)),
     lopFormulaUsed:    formulaUsed,
     lopFormulaDays:    lopDivisorDays,
+    lopEnabled,
     
     // Overtime calculation details
     overtimeRate:      parseFloat(overtimeRate.toFixed(2)),
