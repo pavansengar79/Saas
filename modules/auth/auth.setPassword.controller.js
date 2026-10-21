@@ -13,6 +13,12 @@ exports.setPassword = async (req, res, next) => {
     const { newPassword } = req.body;
     const userId          = req.user.userId;
 
+    // A-03: customer portal tokens carry customerId (no userId)
+    if (!userId && req.user.role === "customer" && req.user.customerId) {
+      const result = await setPasswordService.setCustomerPassword(req.user.customerId, newPassword);
+      return res.status(200).json({ success: true, message: result.message });
+    }
+
     if (!userId) {
       return res.status(401).json({
         success: false,

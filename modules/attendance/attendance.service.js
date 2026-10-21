@@ -76,7 +76,8 @@ const buildMyAttendanceFilter = (employee, start, end) => ({
   isDeleted: false,
 });
 
-const getAttendanceOverview = async (filter, employeeScope, statusFilter, timezone = "Asia/Kolkata") => {
+const getAttendanceOverview = async (filter, employeeScope, statusFilter, timezone = "Asia/Kolkata", workWeek) => {
+  const WORK_DAYS = workWeekSet(workWeek);   // AT-02: company work week
   const moment = require("moment-timezone");
   const employees = await Employee.find({
     org_id: filter.org_id,
@@ -150,7 +151,7 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter, timezo
       }
     }
     for (const day = moment(filter.date.$gte).tz(timezone).startOf("day"); day.isSameOrBefore(end); day.add(1, "day")) {
-      if (day.isoWeekday() > 5) continue;
+      if (!isWorkDayIndex(day.day(), WORK_DAYS)) continue;   // AT-02
       const dateKey = day.format("YYYY-MM-DD");
       for (const employeeId of scopedIds) {
         if (isHoliday(dateKey, employeeId)) continue;
@@ -171,7 +172,7 @@ const getAttendanceOverview = async (filter, employeeScope, statusFilter, timezo
     for (const record of records) {
       const employeeId = String(record.employeeId?._id || record.employeeId);
       const dateKey = moment(record.date).tz(timezone).format("YYYY-MM-DD");
-      if (!scopedIds.has(employeeId) || moment(record.date).tz(timezone).isoWeekday() > 5 ||
+      if (!scopedIds.has(employeeId) || !isWorkDayIndex(moment(record.date).tz(timezone).day(), WORK_DAYS) ||   // AT-02
           isHoliday(dateKey, employeeId) || leaveDays.has(`${employeeId}:${dateKey}`) ||
           (joiningDates.has(employeeId) && dateKey < joiningDates.get(employeeId))) continue;
       if (["PRESENT", "LATE", "HALF_DAY", "WFH"].includes(record.status)) attendedDays.add(`${employeeId}:${dateKey}`);
@@ -1281,7 +1282,7 @@ exports.getAllAttendance = async (query, user) => {
 
   await addUncreditedOvertime(records, ORG_TZ, companyConfig);
 
-  const overview = await getAttendanceOverview(overviewFilter, filter.employeeId ? { _id: filter.employeeId } : {}, status, ORG_TZ);
+  const overview = await getAttendanceOverview(overviewFilter, filter.employeeId ? { _id: filter.employeeId } : {}, status, ORG_TZ, companyConfig?.workWeek);
 
   return {
     page:  pageNum,
@@ -1495,7 +1496,7 @@ exports.getTeamAttendance = async (query, user) => {
     const dateKey = date.format('YYYY-MM-DD');
     const employeeId = String(record.employeeId?._id || record.employeeId);
     const employee = employeesById.get(employeeId);
-    if (!employee || date.isoWeekday() > 5 || isHoliday(dateKey, employee.unit_id) ||
+    if (!employee || !isWorkDayIndex(date.day(), WORK_DAYS) || isHoliday(dateKey, employee.unit_id) ||   // AT-02
         (employee.joiningDate && dayKey(employee.joiningDate) > dateKey) ||
         (leavesByEmp.get(employeeId) || []).some(leave => leave.from <= dateKey && dateKey <= leave.to)) continue;
     const flags = attendanceFlags(record);

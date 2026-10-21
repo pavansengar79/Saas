@@ -25,16 +25,20 @@
 
 const bcrypt   = require("bcryptjs");
 const User     = require("./models/user.model");
+const Customer = require("../customer/models/customer.model");
 const AppError = require("../../utils/appError");
 
-exports.setPassword = async (userId, newPassword) => {
+const assertNewPassword = (newPassword) => {
   if (!newPassword || typeof newPassword !== "string") {
     throw new AppError("newPassword is required", 400);
   }
-
   if (newPassword.trim().length < 8) {
     throw new AppError("Password must be at least 8 characters", 400);
   }
+};
+
+exports.setPassword = async (userId, newPassword) => {
+  assertNewPassword(newPassword);
 
   // Fetch user — include password field (select:false by default)
   const user = await User.findOne({ _id: userId, is_deleted: false }).select("+password");
@@ -65,6 +69,31 @@ exports.setPassword = async (userId, newPassword) => {
   user.is_first_login = false;
   user.refreshTokens  = [];   // invalidate any existing sessions
   await user.save();
+
+  return {
+    message: "Password updated successfully. Please log in with your new password.",
+  };
+};
+
+// A-03: first-login password change for the customer portal.
+// Customer JWT = { customerId, role: "customer" } — no userId, no User document.
+exports.setCustomerPassword = async (customerId, newPassword) => {
+  assertNewPassword(newPassword);
+
+  const customer = await Customer.findOne({ _id: customerId, is_deleted: false }).select("+password");
+  if (!customer) throw new AppError("Customer not found", 404);
+
+  if (customer.is_first_login !== true) {
+    throw new AppError("Password has already been set. Use forgot-password to reset it.", 400);
+  }
+
+  if (customer.password && await bcrypt.compare(newPassword, customer.password)) {
+    throw new AppError("New password must be different from your temporary password", 400);
+  }
+
+  customer.password       = await bcrypt.hash(newPassword, 10);
+  customer.is_first_login = false;
+  await customer.save();
 
   return {
     message: "Password updated successfully. Please log in with your new password.",
