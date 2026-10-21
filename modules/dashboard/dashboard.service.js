@@ -24,6 +24,7 @@ const Plan         = require("../plan/models/plan.model");
 const AuditLog     = require("../superAdmin/models/auditLog.models");
 const Role = require("../role/role.model");
 const CompanyConfig = require("../companyConfig/models/companyConfig.model");
+const { workWeekSet, isWorkDayIndex } = require("../../utils/timezone");
 const { monthRange: orgMonthRange, summarizeAttendance } = require('../attendance/attendanceMetrics');
 
 // CRITICAL FIX: Import timezone utility for consistent date handling
@@ -396,7 +397,7 @@ exports.getUnitDashboard = async (user, query = {}) => {
 
   // Fetch organization timezone from CompanyConfig
   const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
-    .select('timezone')
+    .select('timezone workWeek')   // DB-02: workWeek
     .lean();
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
@@ -608,7 +609,8 @@ exports.getUnitDashboard = async (user, query = {}) => {
       counts.onLeave++;
     }
   }
-  const workingDay = moment.tz(timezone).isoWeekday() <= 5 && !todayHoliday;
+  // DB-02: the selected day (not the real today), per the company work week
+  const workingDay = isWorkDayIndex(moment(todayStart).tz(timezone).day(), workWeekSet(companyConfig?.workWeek)) && !todayHoliday;
   for (const employee of eligible) {
     const id = String(employee._id);
     if (recordedIds.has(id) || !workingDay) continue;
@@ -941,7 +943,7 @@ exports.getManagerDashboard = async (user, query = {}) => {
   
   // Fetch organization timezone
   const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
-    .select('timezone')
+    .select('timezone workWeek')   // DB-02: workWeek
     .lean();
   const timezone = companyConfig?.timezone || 'Asia/Kolkata';
   
@@ -1038,7 +1040,7 @@ exports.getManagerDashboard = async (user, query = {}) => {
       teamCounts.onLeave++;
     }
   }
-  if (moment.tz(timezone).isoWeekday() <= 5 && !teamHoliday) {
+  if (isWorkDayIndex(moment(todayStart).tz(timezone).day(), workWeekSet(companyConfig?.workWeek)) && !teamHoliday) {   // DB-02
     for (const employee of eligibleTeam) {
       const id = String(employee._id);
       if (seenTeam.has(id)) continue;

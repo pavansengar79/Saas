@@ -194,6 +194,11 @@ exports.createEmployeeSchema = Joi.object({
 });
 
 // ─── Update Employee ──────────────────────────────
+// E-02 helpers for profile sub-forms (update only)
+const optText  = Joi.string().trim().allow("", null).optional();
+const optDate  = Joi.date().empty("").allow(null).optional();
+const subDocId = Joi.string().hex().length(24).optional();
+
 exports.updateEmployeeSchema = Joi.object({
 
   name:           Joi.string().optional(),
@@ -258,43 +263,48 @@ exports.updateEmployeeSchema = Joi.object({
   about: Joi.string().max(500).optional().allow(null, ""),
 
 
+  // E-02: the profile forms send back saved rows (with _id) and blank inputs
+  // ("" for empty text/date fields). Accept them instead of rejecting the save.
   bankDetails: Joi.object({
-    accountNumber: Joi.string().optional(),
-    ifscCode:      Joi.string().optional(),
-    bankName:      Joi.string().optional(),
-    branchName:    Joi.string().optional(),
-    accountType:   Joi.string().valid("SAVINGS", "CURRENT").optional()
+    accountNumber: optText,
+    ifscCode:      optText,
+    bankName:      optText,
+    branchName:    optText,
+    accountType:   Joi.string().valid("SAVINGS", "CURRENT").empty("").allow(null).optional()
   }).optional(),
 
   emergencyContact: Joi.object({
-    name:     Joi.string().optional(),
-    phone:    Joi.string().optional(),
-    relation: Joi.string().optional()
+    name:     optText,
+    phone:    optText,
+    relation: optText
   }).optional(),
 
   // ─── Education ─────────────────────────────────────────────────────────────
   education: Joi.array().items(Joi.object({
-    institution: Joi.string().trim().optional(),
-    degree:      Joi.string().trim().optional(),
-    from:        Joi.date().optional(),
-    to:          Joi.date().optional()
+    _id:         subDocId,
+    institution: optText,
+    degree:      optText,
+    from:        optDate,
+    to:          optDate
   })).optional(),
 
   // ─── Work Experience ───────────────────────────────────────────────────────
   experience: Joi.array().items(Joi.object({
-    company: Joi.string().trim().optional(),
-    role:    Joi.string().trim().optional(),
-    from:    Joi.date().optional(),
-    to:      Joi.date().optional(),
+    _id:     subDocId,
+    company: optText,
+    role:    optText,
+    from:    optDate,
+    to:      optDate,
     current: Joi.boolean().optional()
   })).optional(),
 
   // ─── Family Details ───────────────────────────────────────────────────────
   familyDetails: Joi.array().items(Joi.object({
-    name:        Joi.string().trim().optional(),
-    relation:    Joi.string().trim().optional(),
-    dateOfBirth: Joi.date().optional(),
-    phone:       Joi.string().optional()
+    _id:         subDocId,
+    name:        optText,
+    relation:    optText,
+    dateOfBirth: optDate,
+    phone:       optText
   })).optional()
 
 });
