@@ -7,6 +7,7 @@
 const AttendancePolicy = require("./models/attendancePolicy.model");
 const AppError          = require("../../utils/appError");
 const { invalidatePolicyCache } = require("../../utils/policyResolver");
+const { resolveIsNextDay } = require("../../utils/timezone");
 const policyVersionService = require("../policyVersion/policyVersion.service");
 
 const POLICY_TYPE = "ATTENDANCE";
@@ -88,7 +89,7 @@ exports.createPolicy = async (body, user) => {
       name: shift.name,
       start: shift.startTime,
       end: shift.endTime,
-      isNextDay: shift.isNextDay || false,
+      isNextDay: resolveIsNextDay(shift.startTime, shift.endTime, shift.isNextDay), // AT-04
       graceMinutes: shift.gracePeriodMinutes,
       minimumHours: Math.floor(shift.workingMinutes / 60),
       halfDayMinHours: Math.floor(shift.halfDayThresholdMinutes / 60),
@@ -224,7 +225,7 @@ exports.updatePolicy = async (id, body, user) => {
         name: shift.name,
         start: shift.startTime,
         end: shift.endTime,
-        isNextDay: shift.isNextDay || false,
+        isNextDay: resolveIsNextDay(shift.startTime, shift.endTime, shift.isNextDay), // AT-04
         graceMinutes: shift.gracePeriodMinutes,
         minimumHours: Math.floor(shift.workingMinutes / 60),
         halfDayMinHours: Math.floor(shift.halfDayThresholdMinutes / 60),

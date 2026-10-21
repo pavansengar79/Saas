@@ -17,6 +17,7 @@ const AppError          = require('../../utils/appError');
 const { createAdapter } = require('./adapters/biometricAdapter.interface');
 const CompanyConfig      = require('../companyConfig/models/companyConfig.model');
 const moment             = require('moment-timezone');
+const { resolveIsNextDay } = require('../../utils/timezone');
 
 // ─── Build Scope Filter ───────────────────────────────────────────────
 const buildScopeFilter = (user) => {
@@ -914,12 +915,12 @@ const updateAttendanceFromPunchWithTimes = async (employee, firstPunchTime, last
     const unit = await Unit.findOne({ _id: config.unit_id }).select('shiftConfig').lean();
     
     if (unit?.shiftConfig?.defaultShift) {
-      const defaultShift = await Shift.findById(unit.shiftConfig.defaultShift).select('endTime isNextDay').lean();
+      const defaultShift = await Shift.findById(unit.shiftConfig.defaultShift).select('startTime endTime isNextDay').lean();
       
       if (defaultShift) {
         const [shiftEndH, shiftEndM] = defaultShift.endTime.split(':').map(Number);
         shiftEndTime = moment(nowInOrg).set({ hour: shiftEndH, minute: shiftEndM, second: 0, millisecond: 0 });
-        isNextDayShift = defaultShift.isNextDay || false;
+        isNextDayShift = resolveIsNextDay(defaultShift.startTime, defaultShift.endTime, defaultShift.isNextDay); // AT-04
       }
     }
   }

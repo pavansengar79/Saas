@@ -7,7 +7,7 @@ const Attendance = require("../modules/attendance/models/attendance.model");
 const Employee   = require("../modules/employee/models/employee.model");
 const CompanyConfig = require("../modules/companyConfig/models/companyConfig.model");
 const Holiday = require('../modules/holiday/models/holiday.models');
-const { getDayOfWeek, getTodayDateInOrgTimezone } = require('../utils/timezone');
+const { getDayOfWeek, getTodayDateInOrgTimezone, workWeekSet } = require('../utils/timezone');
 
 exports.runAutoAbsentMarker = async () => {
   console.log(`[AutoAbsent] Running auto-absent marker...`);
@@ -41,7 +41,7 @@ exports.runAutoAbsentMarker = async () => {
       const config = await CompanyConfig.findOne({ 
         org_id: group.org_id, 
         company_id: group.company_id 
-      }).select('timezone').lean();
+      }).select('timezone workWeek').lean();
       
       const timezone = config?.timezone || 'Asia/Kolkata';
       
@@ -53,7 +53,7 @@ exports.runAutoAbsentMarker = async () => {
       
       // Check if working day in org timezone
       const dayOfWeek = getDayOfWeek(targetDate, timezone);
-      const isWorkingDay = ["MON","TUE","WED","THU","FRI"].includes(dayOfWeek);
+      const isWorkingDay = workWeekSet(config?.workWeek).has(dayOfWeek);   // AT-02: company work week
       
       if (!isWorkingDay) {
         console.log(`[AutoAbsent] ${key}: Skipping — non-working day (${dayOfWeek})`);
