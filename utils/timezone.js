@@ -323,6 +323,27 @@ const getDayOfWeek = (date, timezone = 'Asia/Kolkata') => {
   return DAY_MAP[dayIndex];
 };
 
+// ─── Work week (AT-02) ───────────────────────────────────────────────
+const DEFAULT_WORK_WEEK = ["MON", "TUE", "WED", "THU", "FRI"];
+const DAY_CODES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+// Company work week (CompanyConfig.workWeek); Mon–Fri only as fallback
+const workWeekSet = (workWeek) =>
+  new Set(Array.isArray(workWeek) && workWeek.length ? workWeek : DEFAULT_WORK_WEEK);
+
+// dayIndex = moment().day() → 0 = SUN ... 6 = SAT
+const isWorkDayIndex = (dayIndex, set) => set.has(DAY_CODES[dayIndex]);
+
+// ─── Night shift (AT-04) ─────────────────────────────────────────────
+// A shift whose end is at/before its start crosses midnight, even if
+// the isNextDay flag was not set when the shift was saved.
+const toMinutesOfDay = (hhmm) => {
+  const [h, m] = String(hhmm || "").split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+};
+const resolveIsNextDay = (start, end, flag) =>
+  !!flag || (!!start && !!end && toMinutesOfDay(end) <= toMinutesOfDay(start));
+
 module.exports = {
   toOrgTimezone,
   toUTC,
@@ -338,5 +359,8 @@ module.exports = {
   formatTimeOnly,
   formatDateOnly,
   formatShiftTime,
-  getDayOfWeek
+  getDayOfWeek,
+  workWeekSet,
+  isWorkDayIndex,
+  resolveIsNextDay
 };

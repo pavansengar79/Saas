@@ -16,6 +16,7 @@
 const Shift    = require("./models/shift.model");
 const Roster   = require("./models/roster.model");
 const AppError = require("../../utils/appError");
+const { resolveIsNextDay } = require("../../utils/timezone");
 const mongoose = require("mongoose");
 
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
@@ -136,7 +137,7 @@ exports.createShift = async (payload, user) => {
     unit_id:                 targetUnitId,
     startTime,
     endTime,
-    isNextDay,
+    isNextDay: resolveIsNextDay(startTime, endTime, isNextDay),   // AT-04: end <= start → next day
     gracePeriodMinutes,
     halfDayThresholdMinutes,
     workingMinutes,
@@ -276,6 +277,9 @@ exports.updateShift = async (id, payload, user) => {
   if (applicableDays          !== undefined) shift.applicableDays          = applicableDays;
   if (shiftType               !== undefined) shift.shiftType               = shiftType;
   if (isDefault               !== undefined) shift.isDefault               = isDefault;
+
+  // AT-04: end <= start always means the shift ends the next day
+  shift.isNextDay = resolveIsNextDay(shift.startTime, shift.endTime, shift.isNextDay);
 
   shift.updatedBy = user.userId;
   await shift.save();

@@ -30,7 +30,10 @@ const {
   formatInTimezone,
   formatTimeOnly,
   formatShiftTime,
-  getDayOfWeek
+  getDayOfWeek,
+  workWeekSet,
+  isWorkDayIndex,
+  resolveIsNextDay
 } = require("../../utils/timezone");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -551,7 +554,7 @@ exports.punchIn = async (data, user, req = null) => {
       const s         = shiftResult.shift;
       shiftStart      = s.startTime;                               // "HH:MM"
       shiftEnd        = s.endTime;                                 // "HH:MM"
-      isNextDay       = s.isNextDay ?? false;                      // night shift
+      isNextDay       = resolveIsNextDay(s.startTime, s.endTime, s.isNextDay); // night shift (AT-04: derived if end <= start)
       graceMinutes    = s.gracePeriodMinutes    ?? 15;
       standardHours   = (s.workingMinutes ?? 480) / 60;           // minutes → hours
       halfDayThreshold = (s.halfDayThresholdMinutes ?? 240) / 60; // minutes → hours
@@ -575,7 +578,7 @@ exports.punchIn = async (data, user, req = null) => {
   if (shiftSource === "policy_default" && attendancePolicy) {
     shiftStart       = attendancePolicy.shift?.start          ?? "09:00";
     shiftEnd         = attendancePolicy.shift?.end          ?? "18:00";
-    isNextDay        = attendancePolicy.shift?.isNextDay     ?? false;
+    isNextDay        = resolveIsNextDay(shiftStart, shiftEnd, attendancePolicy.shift?.isNextDay); // AT-04
     graceMinutes     = attendancePolicy.shift?.graceMinutes   ?? 15;
     standardHours    = attendancePolicy.shift?.minimumHours   ?? 8;
     halfDayThreshold = attendancePolicy.shift?.halfDayMinHours ?? 4;
@@ -1010,8 +1013,9 @@ exports.getMySummary = async (query, user) => {
 // Needed because an employee on leave never punches, so most leave days have
 // no Attendance document until the nightly job runs (and never for today).
 // ─────────────────────────────────────────────────────────────────────────────
-const getApprovedLeaveDays = async ({ orgId, companyId, unitId, employeeFilter, rangeStart, rangeEnd, tz }) => {
+const getApprovedLeaveDays = async ({ orgId, companyId, unitId, employeeFilter, rangeStart, rangeEnd, tz, workWeek }) => {
   const moment = require("moment-timezone");
+  const WORK_DAYS = workWeekSet(workWeek);   // AT-02: company work week
   const result = new Map();
   if (!rangeStart || !rangeEnd || rangeStart > rangeEnd) return result;
 
@@ -1059,7 +1063,7 @@ const getApprovedLeaveDays = async ({ orgId, companyId, unitId, employeeFilter, 
 
     for (let d = moment.tz(first, tz); d.format("YYYY-MM-DD") <= last; d.add(1, "day")) {
       const dow = d.day();
-      if (dow === 0 || dow === 6) continue;
+      if (!isWorkDayIndex(dow, WORK_DAYS)) continue;   // AT-02
       const k = d.format("YYYY-MM-DD");
       const hol = holidayMap.get(k);
       if (hol && (hol.has("ALL") || hol.has(unit))) continue;
@@ -1125,7 +1129,8 @@ exports.getAllAttendance = async (query, user) => {
 
   // Date range handling
   const moment = require("moment-timezone");
-  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId }).select('timezone overtimeEnabled overtimeThresholdHours').lean();
+  const companyConfig = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId })
+    .select('timezone overtimeEnabled overtimeThresholdHours workWeek').lean();   // AT-02: workWeek
   const ORG_TZ = companyConfig?.timezone || 'Asia/Kolkata';
 
   if (startDate && endDate) {
@@ -1181,6 +1186,7 @@ exports.getAllAttendance = async (query, user) => {
     // AT-06 On Leave filter: approved leave on a future date is still "On Leave" for that date
     rangeEnd:   status === "ON_LEAVE" || rangeEndRaw < todayEnd ? rangeEndRaw : todayEnd,
     tz: ORG_TZ,
+    workWeek: companyConfig?.workWeek,   // AT-02
   });
 
   // Existing records on those leave days: ABSENT ones are shown as ON_LEAVE,
@@ -1335,8 +1341,10 @@ exports.getTeamAttendance = async (query, user) => {
 
   // Date range handling
   const moment = require("moment-timezone");
-  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId }).select('timezone overtimeEnabled overtimeThresholdHours').lean();
+  const companyConfig = await CompanyConfig.findOne({ org_id: user.orgId, company_id: user.companyId })
+    .select('timezone overtimeEnabled overtimeThresholdHours workWeek').lean();   // AT-02: workWeek
   const ORG_TZ = companyConfig?.timezone || 'Asia/Kolkata';
+  const WORK_DAYS = workWeekSet(companyConfig?.workWeek);   // AT-02
 
   if (startDate && endDate) {
     const start = moment.tz(`${startDate} 00:00:00`, ORG_TZ).utc().toDate();
@@ -1432,7 +1440,7 @@ exports.getTeamAttendance = async (query, user) => {
 
     for (let day = rangeStart.clone(); day.isSameOrBefore(rangeEnd, "day"); day.add(1, "day")) {
       const dow = day.day();
-      if (dow === 0 || dow === 6) continue;              // weekend (same rule as auto-absent job)
+      if (!isWorkDayIndex(dow, WORK_DAYS)) continue;     // AT-02: company work week
       const k = day.format("YYYY-MM-DD");
 
       for (const emp of employees) {
@@ -1807,7 +1815,7 @@ exports.adminPunchIn = async (data, user) => {
       const s = shiftResult.shift
       shiftStart = s.startTime
       shiftEnd = s.endTime
-      isNextDay = s.isNextDay ?? false
+      isNextDay = resolveIsNextDay(s.startTime, s.endTime, s.isNextDay) // AT-04
       graceMinutes = s.gracePeriodMinutes ?? 15
       standardHours = (s.workingMinutes ?? 480) / 60
       halfDayThreshold = (s.halfDayThresholdMinutes ?? 240) / 60
@@ -1830,7 +1838,7 @@ exports.adminPunchIn = async (data, user) => {
   if (shiftSource === 'policy_default' && attendancePolicy) {
     shiftStart = attendancePolicy.shift?.start ?? '09:00'
     shiftEnd = attendancePolicy.shift?.end ?? '18:00'
-    isNextDay = attendancePolicy.shift?.isNextDay ?? false
+    isNextDay = resolveIsNextDay(shiftStart, shiftEnd, attendancePolicy.shift?.isNextDay) // AT-04
     graceMinutes = attendancePolicy.shift?.graceMinutes ?? 15
     standardHours = attendancePolicy.shift?.minimumHours ?? 8
     halfDayThreshold = attendancePolicy.shift?.halfDayMinHours ?? 4
