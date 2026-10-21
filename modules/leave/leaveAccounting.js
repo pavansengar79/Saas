@@ -1,16 +1,19 @@
 const moment = require('moment-timezone');
+const { workWeekSet, isWorkDayIndex } = require('../../utils/timezone');
 
 // Preserve the request's charged totalDays (including half-days/sandwich rules)
 // while distributing a multi-year request according to its working-day dates.
-const daysInYear = (request, year) => {
+// L-04: workWeek = CompanyConfig.workWeek (Mon–Fri only as fallback)
+const daysInYear = (request, year, workWeek) => {
   const start = moment.utc(request.startDate).startOf('day');
   const end = moment.utc(request.endDate).startOf('day');
   if (!start.isValid() || !end.isValid() || end.isBefore(start)) return 0;
   if (start.year() === end.year()) return start.year() === year ? request.totalDays : 0;
+  const workDays = workWeekSet(workWeek);
   let all = 0;
   let inYear = 0;
   for (const day = start.clone(); day.isSameOrBefore(end); day.add(1, 'day')) {
-    if (day.isoWeekday() > 5) continue;
+    if (!isWorkDayIndex(day.day(), workDays)) continue;
     all++;
     if (day.year() === year) inYear++;
   }

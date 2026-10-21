@@ -13,6 +13,8 @@ const Employee     = require("../employee/models/employee.model");
 const User         = require("../auth/models/user.model");
 const Role         = require("../role/role.model");
 const AppError     = require("../../utils/appError");
+const CompanyConfig = require("../companyConfig/models/companyConfig.model");
+const { workWeekSet, isWorkDayIndex } = require("../../utils/timezone");
 const { sendEmail } = require("../../utils/email/email");
 const {
   leaveApprovedTemplate,
@@ -23,7 +25,14 @@ const {
 const toObjId = (id) => new mongoose.Types.ObjectId(String(id));
 
 // ─── Working days calculate (weekends excluded) ───────────────
-const calcWorkingDays = (start, end) => {
+// L-04: company work week (CompanyConfig.workWeek), Mon–Fri only as fallback
+const getWorkWeek = async (orgId, companyId) => {
+  const config = await CompanyConfig.findOne({ org_id: orgId, company_id: companyId }).select("workWeek").lean();
+  return config?.workWeek;
+};
+
+const calcWorkingDays = (start, end, workWeek) => {
+  const workDays = workWeekSet(workWeek);
   let count = 0;
   const cur = new Date(start);
   cur.setHours(0, 0, 0, 0);
@@ -31,7 +40,7 @@ const calcWorkingDays = (start, end) => {
   endD.setHours(0, 0, 0, 0);
   while (cur <= endD) {
     const day = cur.getDay();
-    if (day !== 0 && day !== 6) count++;
+    if (isWorkDayIndex(day, workDays)) count++;
     cur.setDate(cur.getDate() + 1);
   }
   return count;
@@ -242,13 +251,14 @@ exports.applyLeave = async (payload, user) => {
   if (end < start) throw new AppError("End date cannot be before start date", 400);
 
   // Total days calculate
+  const workWeek = await getWorkWeek(employee.org_id, employee.company_id);   // L-04
   let totalDays;
   if (isHalfDay) {
     if (!session) throw new AppError("session (FIRST_HALF/SECOND_HALF) required for half day", 400);
     if (start.getTime() !== end.getTime()) throw new AppError("Start and end date must be same for half day", 400);
     totalDays = 0.5;
   } else {
-    totalDays = calcWorkingDays(start, end);
+    totalDays = calcWorkingDays(start, end, workWeek);
     if (totalDays === 0) throw new AppError("No working days in selected date range", 400);
   }
 
@@ -306,11 +316,11 @@ exports.applyLeave = async (payload, user) => {
 
     // Calculate usage dynamically
     const allocated = earnedCredits(policyLeaveType.credit, year, start, employee.joiningDate);
-    const usage = await calculateLeaveUsage(employee._id, leaveTypeId, year);
+    const usage = await calculateLeaveUsage(employee._id, leaveTypeId, year, workWeek);
     const remaining = allocated - usage.used - usage.pending +
       (policyLeaveType.balance?.allowNegative ? policyLeaveType.balance.maxNegative || 0 : 0);
 
-    if (remaining < daysInYear({ startDate: start, endDate: end, totalDays }, year)) {
+    if (remaining < daysInYear({ startDate: start, endDate: end, totalDays }, year, workWeek)) {
       throw new AppError(
         `Insufficient leave balance. Available: ${remaining} day(s), Requested: ${totalDays} day(s)`,
         400
@@ -319,11 +329,11 @@ exports.applyLeave = async (payload, user) => {
 
     if (end.getUTCFullYear() !== year) {
       const nextYear = end.getUTCFullYear();
-      const nextUsage = await calculateLeaveUsage(employee._id, leaveTypeId, nextYear);
+      const nextUsage = await calculateLeaveUsage(employee._id, leaveTypeId, nextYear, workWeek);
       const nextAllocation = earnedCredits(policyLeaveType.credit, nextYear, end, employee.joiningDate);
       const nextAvailable = nextAllocation - nextUsage.used - nextUsage.pending +
         (policyLeaveType.balance?.allowNegative ? policyLeaveType.balance.maxNegative || 0 : 0);
-      if (nextAvailable < daysInYear({ startDate: start, endDate: end, totalDays }, nextYear)) {
+      if (nextAvailable < daysInYear({ startDate: start, endDate: end, totalDays }, nextYear, workWeek)) {
         throw new AppError(`Insufficient leave balance for ${nextYear}`, 400);
       }
     }
@@ -1735,6 +1745,7 @@ exports.editLeaveRequest = async (id, payload, user) => {
   const halfDay = isHalfDay ?? request.isHalfDay;
   const finalSession = halfDay ? (session || request.session) : null;
 
+  const workWeek = await getWorkWeek(employee.org_id, employee.company_id);   // L-04
   let totalDays;
   if (halfDay) {
     if (!finalSession) throw new AppError("session (FIRST_HALF/SECOND_HALF) required for half day", 400);
@@ -1742,7 +1753,7 @@ exports.editLeaveRequest = async (id, payload, user) => {
       throw new AppError("Start and end date must be same for half day", 400);
     totalDays = 0.5;
   } else {
-    totalDays = calcWorkingDays(start, end);
+    totalDays = calcWorkingDays(start, end, workWeek);
     if (totalDays === 0) throw new AppError("No working days in selected date range", 400);
   }
 
@@ -1783,7 +1794,7 @@ exports.editLeaveRequest = async (id, payload, user) => {
   }
 
   const allocated = policyLeaveType.credit?.totalPerYear || 0;
-  const usage = await calculateLeaveUsage(employee._id, finalLeaveTypeId, today.getFullYear());
+  const usage = await calculateLeaveUsage(employee._id, finalLeaveTypeId, today.getFullYear(), workWeek);
   // This request's own days are already counted as "pending" for its current
   // leave type — don't count them twice when the type stays the same.
   const sameType = String(request.leaveTypeId) === String(finalLeaveTypeId);

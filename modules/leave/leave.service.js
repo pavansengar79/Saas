@@ -8,6 +8,7 @@ const LeaveType    = require("./models/leaveType.models");
 const LeaveRequest = require("./models/leaveRequest.models");
 const Employee     = require("../employee/models/employee.model");
 const AppError     = require("../../utils/appError");
+const CompanyConfig = require("../companyConfig/models/companyConfig.model");
 const mongoose     = require("mongoose");
 const { resolveLeaveTypeScope } = require("./leaveTypeScope");
 const { daysInYear, earnedCredits } = require('./leaveAccounting');
@@ -79,7 +80,7 @@ const getActiveLeavePolicy = async (org_id, company_id, unit_id) => {
 /**
  * Calculate leave usage from approved/pending leave requests
  */
-const calculateLeaveUsage = async (employeeId, leaveTypeId, year) => {
+const calculateLeaveUsage = async (employeeId, leaveTypeId, year, workWeek) => {
   const startOfYear = new Date(Date.UTC(year, 0, 1));
   const endOfYear = new Date(Date.UTC(year + 1, 0, 1));
 
@@ -94,9 +95,17 @@ const calculateLeaveUsage = async (employeeId, leaveTypeId, year) => {
         isDeleted: false,
   }).select('startDate endDate totalDays status').lean();
 
+  // L-04: only a request that crosses the year needs the company work week
+  const crossesYear = requests.some(r => new Date(r.startDate).getUTCFullYear() !== new Date(r.endDate).getUTCFullYear());
+  if (crossesYear && workWeek === undefined) {
+    const emp = await Employee.findById(employeeId).select('org_id company_id').lean();
+    const config = emp && await CompanyConfig.findOne({ org_id: emp.org_id, company_id: emp.company_id }).select('workWeek').lean();
+    workWeek = config?.workWeek;
+  }
+
   return {
-    used: requests.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + daysInYear(r, year), 0),
-    pending: requests.filter(r => r.status !== 'APPROVED').reduce((sum, r) => sum + daysInYear(r, year), 0),
+    used: requests.filter(r => r.status === 'APPROVED').reduce((sum, r) => sum + daysInYear(r, year, workWeek), 0),
+    pending: requests.filter(r => r.status !== 'APPROVED').reduce((sum, r) => sum + daysInYear(r, year, workWeek), 0),
   };
 };
 
