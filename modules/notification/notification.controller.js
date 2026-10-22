@@ -1,6 +1,20 @@
 "use strict";
 const service = require("./notification.service");
 
+exports.getPreferences = async (req, res, next) => {
+  try {
+    const data = await service.getPreferences(req.user);
+    res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+};
+
+exports.updatePreferences = async (req, res, next) => {
+  try {
+    const data = await service.updatePreferences(req.body, req.user);
+    res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+};
+
 exports.getMyNotifications = async (req, res, next) => {
   try {
     const data = await service.getMyNotifications(req.query, req.user);

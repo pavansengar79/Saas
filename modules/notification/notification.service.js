@@ -2,6 +2,7 @@
 "use strict";
 
 const Notification = require("./notification.model");
+const User = require("../auth/models/user.model");
 const { sendEmail } = require("../../utils/email/email");
 const mongoose = require("mongoose");
 const AppError  = require("../../utils/appError");
@@ -9,6 +10,25 @@ const AppError  = require("../../utils/appError");
 const toObjId = (id) => {
   try { return new mongoose.Types.ObjectId(String(id)); }
   catch { return null; }
+};
+
+exports.getPreferences = async (user) => {
+  const account = await User.findById(toObjId(user.userId)).select("notificationEmailEnabled").lean();
+  if (!account) throw new AppError("User not found", 404);
+  return { emailEnabled: account.notificationEmailEnabled !== false };
+};
+
+exports.updatePreferences = async (preferences, user) => {
+  if (typeof preferences?.emailEnabled !== "boolean") {
+    throw new AppError("emailEnabled must be a boolean", 400);
+  }
+  const account = await User.findByIdAndUpdate(
+    toObjId(user.userId),
+    { $set: { notificationEmailEnabled: preferences.emailEnabled } },
+    { new: true }
+  );
+  if (!account) throw new AppError("User not found", 404);
+  return { emailEnabled: account.notificationEmailEnabled };
 };
 
 // ─── TEMPLATES ───────────────────────────────────────────────
@@ -191,10 +211,13 @@ exports.createNotification = async ({
     // Send email if requested
     if (sendEmailTo && emailSubject && emailHtml) {
       try {
-        await sendEmail({ to: sendEmailTo, subject: emailSubject, html: emailHtml });
-        notification.emailSent   = true;
-        notification.emailSentAt = new Date();
-        await notification.save();
+        const recipient = await User.findById(toObjId(userId)).select("notificationEmailEnabled").lean();
+        if (recipient?.notificationEmailEnabled !== false) {
+          await sendEmail({ to: sendEmailTo, subject: emailSubject, html: emailHtml });
+          notification.emailSent   = true;
+          notification.emailSentAt = new Date();
+          await notification.save();
+        }
       } catch (emailErr) {
         console.error("[Notification] Email failed:", emailErr.message);
       }

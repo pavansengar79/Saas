@@ -7,6 +7,8 @@ const { authenticate } = require("../../middlewares/auth.middleware");
 
 // ─── In-App Notification Routes ───────────────────────────────────────
 router.get("/",              authenticate, ctrl.getMyNotifications);
+router.get("/preferences",   authenticate, ctrl.getPreferences);
+router.put("/preferences",   authenticate, ctrl.updatePreferences);
 router.get("/unread-count",  authenticate, ctrl.getUnreadCount);
 router.get("/user/:userId",   authenticate, ctrl.getUserNotifications); // Admin: Get user's notifications
 router.patch("/read-all",    authenticate, ctrl.markAllAsRead);

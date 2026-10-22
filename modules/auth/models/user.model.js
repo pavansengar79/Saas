@@ -148,6 +148,11 @@ const userSchema = new mongoose.Schema(
       }
     }],
 
+    notificationEmailEnabled: {
+      type: Boolean,
+      default: true,
+    },
+
     // ─── Security ─────────────────────────────────────────────
     loginAttempts: {
       type: Number,

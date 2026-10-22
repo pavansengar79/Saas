@@ -67,6 +67,12 @@ const companySchema = new mongoose.Schema(
       match: /^[0-9]{1,13}$/,
     },
 
+    phone_country_code: {
+      type: String,
+      uppercase: true,
+      match: /^[A-Z]{2}$/,
+    },
+
     logo_url: {
       type: String,
       default: null,
