@@ -42,6 +42,7 @@ const payrollPeriodLockSchema = new Schema({
   // ─── History ─────────────────────────────────────────────────
   history: [{
     action:  { type: String, enum: ["LOCKED", "UNLOCKED"] },
+    period:  { type: String },
     by:      { type: Schema.Types.ObjectId, ref: "User" },
     at:      { type: Date },
     reason:  { type: String },

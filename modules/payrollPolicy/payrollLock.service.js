@@ -80,7 +80,7 @@ exports.lockPeriod = async (payload, user) => {
     existing.unlockedBy   = null;
     existing.unlockReason = null;
     existing.updatedBy    = toObjId(user.userId);
-    existing.history.push({ action: "LOCKED", by: toObjId(user.userId), at: new Date(), reason: reason || null });
+    existing.history.push({ action: "LOCKED", period, by: toObjId(user.userId), at: new Date(), reason: reason || null });
     await existing.save();
     return existing;
   }
@@ -100,7 +100,7 @@ exports.lockPeriod = async (payload, user) => {
     totalEmployees:  [...new Set(payslips.map(p => p.employee_id?.toString()))].length,
     totalPayslips:   payslips.length,
     totalNetPayroll,
-    history: [{ action: "LOCKED", by: toObjId(user.userId), at: new Date(), reason: reason || null }],
+    history: [{ action: "LOCKED", period, by: toObjId(user.userId), at: new Date(), reason: reason || null }],
     createdBy:       toObjId(user.userId),
   });
 
@@ -128,7 +128,7 @@ exports.unlockPeriod = async (payload, user) => {
   lock.unlockedBy   = toObjId(user.userId);
   lock.unlockReason = reason;
   lock.updatedBy    = toObjId(user.userId);
-  lock.history.push({ action: "UNLOCKED", by: toObjId(user.userId), at: new Date(), reason });
+  lock.history.push({ action: "UNLOCKED", period, by: toObjId(user.userId), at: new Date(), reason });
   await lock.save();
 
   return lock;

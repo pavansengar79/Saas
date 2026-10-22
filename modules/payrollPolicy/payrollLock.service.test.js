@@ -47,6 +47,7 @@ test("lock, unlock and relock retain the period and action history", async () =>
   assert.equal(savedLock.month, 10);
   assert.equal(savedLock.year, 2026);
   assert.equal(savedLock.history[0].action, "LOCKED");
+  assert.equal(savedLock.history[0].period, "Oct 2026");
   assert.ok(savedLock.history[0].at instanceof Date);
 
   await lockService.unlockPeriod({ month, reason: "Correct attendance" }, user);
@@ -54,6 +55,7 @@ test("lock, unlock and relock retain the period and action history", async () =>
   const result = await lockService.getLockStatus(month, user);
   assert.equal(result.period, "Oct 2026");
   assert.deepEqual(result.history.map(entry => entry.action), ["LOCKED", "UNLOCKED", "LOCKED"]);
+  assert.deepEqual(result.history.map(entry => entry.period), ["Oct 2026", "Oct 2026", "Oct 2026"]);
   assert.ok(result.history.every(entry => entry.at instanceof Date));
   assert.ok(populatedPaths.includes("history.by"));
 });
