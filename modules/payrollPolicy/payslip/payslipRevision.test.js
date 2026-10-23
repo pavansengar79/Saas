@@ -43,3 +43,13 @@ test("P0-7 reason, fields and amounts are validated", () => {
   assert.throws(() => applyPayslipRevision(makePayslip(), { reason: "valid reason here" }), /Nothing to revise/);
   assert.throws(() => applyPayslipRevision(makePayslip(), { reason: "valid reason here", deductions: { other: 60000 } }), /cannot be more/);
 });
+
+test("PF-1 revision keeps custom components in gross", () => {
+  const original = makePayslip("PUBLISHED");
+  original.earnings.customComponents = [{ code: "DA", name: "DA", amount: 4000 }];
+  original.grossSalary = 54000;
+  original.grossAfterLOP = 53000;
+  const payslip = applyPayslipRevision(original, { reason: "Arrears for September", earnings: { arrears: 1000 } }, "user-1");
+  assert.equal(payslip.grossSalary, 55000);   // 50,000 fixed + 4,000 DA + 1,000 arrears
+  assert.equal(payslip.grossAfterLOP, 54000);
+});

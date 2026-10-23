@@ -2,6 +2,7 @@
 
 const AppError = require("../../utils/appError");
 const { calculatePT } = require("../../config/ptSlabs");
+const moment = require("moment-timezone");
 
 const DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -151,6 +152,7 @@ const round2 = value => Number(value.toFixed(2));
 const calculateStatutoryDeductions = ({
   basic,
   fullBasic = basic,
+  customPfWages = 0,
   grossSalary,
   standardGross = grossSalary,
   taxCompliance = {},
@@ -166,9 +168,12 @@ const calculateStatutoryDeductions = ({
   // A stale policy value (15000) must not undercut the statutory ceiling.
   const pfCeiling = Math.max(taxCompliance.pfCeilingAmount ?? 0, statutoryCeiling);
   const payableShare = fullBasic > 0 ? basic / fullBasic : 0;
+  // PF-1: custom components marked pfApplicable (e.g. DA) are PF wages too.
+  // customPfWages is the full monthly amount; it is paid in the same share as basic.
+  const fullPfWages = fullBasic + customPfWages;
   const pfBase = taxCompliance.pfApplyOnActualBasic
-    ? basic
-    : Math.min(fullBasic, pfCeiling) * payableShare;
+    ? basic + customPfWages * payableShare
+    : Math.min(fullPfWages, pfCeiling) * payableShare;
   const pfEmployee = pfEnabled
     ? round2(pfBase * ((taxCompliance.pfEmployeeRate ?? 12) / 100))
     : 0;
@@ -230,7 +235,12 @@ const isEpsEligibleByAge = (dateOfBirth, year, month) => {
  * @param {object} input Prior FY earnings/TDS and current month figures.
  * @returns {{projectedAnnualGross: number, remainingMonths: number, monthlyTDS: number}}
  */
-const projectAnnualIncomeForTDS = ({ month, priorGross = 0, currentGross, monthlyGross }) => {
+const projectAnnualIncomeForTDS = ({ month, priorGross = 0, currentGross, monthlyGross, isExitMonth = false }) => {
+  // PF-5: in the exit month there is no future salary. Tax is on what was
+  // actually paid this FY, and whatever is still due is deducted now.
+  if (isExitMonth) {
+    return { projectedAnnualGross: round2(priorGross + currentGross), remainingMonths: 1 };
+  }
   const remainingMonths = month >= 4 ? 16 - month : 4 - month;
   const projectedAnnualGross = priorGross + currentGross + monthlyGross * (remainingMonths - 1);
   return { projectedAnnualGross: round2(projectedAnnualGross), remainingMonths };
@@ -354,7 +364,61 @@ const calculateOvertimePay = ({
   };
 };
 
+/**
+ * PF-1: custom salary components (DA, food, internet …) for one payroll month.
+ * Amounts are prorated with the same earnings factor as basic / HRA.
+ * @param {Array} components employee.salary.customComponents
+ * @param {number} earningsFactor proration factor used for the fixed components
+ * @returns {{items: Array, monthly: number, earned: number, monthlyNonTaxable: number, earnedNonTaxable: number, monthlyPf: number}}
+ */
+const summarizeCustomComponents = (components = [], earningsFactor = 1) => {
+  const summary = { items: [], monthly: 0, earned: 0, monthlyNonTaxable: 0, earnedNonTaxable: 0, monthlyPf: 0 };
+  for (const component of components || []) {
+    const amount = Math.max(0, Number(component?.amount) || 0);
+    if (!amount) continue;
+    const earned = round2(amount * earningsFactor);
+    const taxable = component.taxable !== false;
+    const pfApplicable = component.pfApplicable === true;
+    summary.items.push({
+      code: component.code,
+      name: component.name,
+      amount: earned,
+      taxable,
+      pfApplicable,
+      esiApplicable: component.esiApplicable === true,
+    });
+    summary.monthly += amount;
+    summary.earned += earned;
+    if (!taxable) {
+      summary.monthlyNonTaxable += amount;
+      summary.earnedNonTaxable += earned;
+    }
+    if (pfApplicable) summary.monthlyPf += amount;
+  }
+  for (const key of ["monthly", "earned", "monthlyNonTaxable", "earnedNonTaxable", "monthlyPf"]) {
+    summary[key] = round2(summary[key]);
+  }
+  return summary;
+};
+
+/**
+ * PF-5: true when the exit date falls inside the payroll month, judged in the
+ * company timezone (dates are stored at local midnight, e.g. 18:30Z for IST).
+ * @param {Date|string|null} exitDate
+ * @param {number} year
+ * @param {number} month 1-12
+ * @param {string} timezone
+ * @returns {boolean}
+ */
+const isExitInPayrollMonth = (exitDate, year, month, timezone = "Asia/Kolkata") => {
+  if (!exitDate) return false;
+  const exit = moment(exitDate).tz(timezone);
+  return exit.isValid() && exit.year() === year && exit.month() + 1 === month;
+};
+
 module.exports = {
+  summarizeCustomComponents,
+  isExitInPayrollMonth,
   assertPayrollRunDateReached,
   calculateOvertimePay,
   calculatePayrollEligibility,

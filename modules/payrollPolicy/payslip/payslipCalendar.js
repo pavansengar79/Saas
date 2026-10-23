@@ -70,7 +70,8 @@ function buildPayslipCalendar({ payslip, attendance, holidays, leaves, paidLeave
   }
 
   const recurring = ["basic", "hra", "travelAllowance", "medicalAllowance", "specialAllowance"]
-    .reduce((sum, key) => sum + cents(payslip.earnings?.[key]), 0);
+    .reduce((sum, key) => sum + cents(payslip.earnings?.[key]), 0)
+    + (payslip.earnings?.customComponents || []).reduce((sum, item) => sum + cents(item?.amount), 0);   // PF-1
   const creditUnits = days.filter(day => day.status !== "NOT_ELIGIBLE").length;
   const lopUnits = days.reduce((sum, day) => sum + day.unpaid, 0);
   const savedLopDays = Number(payslip.lopDays);

@@ -95,3 +95,17 @@ test("holiday attendance stays payable without a holiday master entry", () => {
   assert.equal(calendar.days[1].status, "HOLIDAY");
   assert.equal(calendar.days[1].payable, 1);
 });
+
+test("PF-1 custom components are spread over the days like the other recurring pay", () => {
+  const payslip = {
+    year: 2026, month: 10, calculatedThrough: new Date("2026-10-31T23:59:59.999Z"),
+    earnings: { basic: 20000, hra: 8000, customComponents: [{ code: "DA", name: "DA", amount: 3100 }] },
+    grossSalary: 31100, deductions: { lop: 0 }, netSalary: 31100,
+  };
+  const calendar = buildPayslipCalendar({
+    payslip, timezone: "Asia/Kolkata", workWeek: ["MON", "TUE", "WED", "THU", "FRI"],
+    attendance: [], holidays: [], leaves: [], paidLeaveTypeIds: new Set(),
+  });
+  assert.equal(calendar.days.reduce((sum, day) => sum + Math.round(day.credit * 100), 0), 3110000);
+  assert.equal(calendar.monthlyEarnings, 0);
+});
