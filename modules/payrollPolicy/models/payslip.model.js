@@ -130,6 +130,7 @@ const payslipSchema = new mongoose.Schema({
     projectedAnnualGross: { type: Number, default: 0 },
     remainingMonths:  { type: Number, default: 0 },
     priorTDS:         { type: Number, default: 0 },
+    isExitMonth:      { type: Boolean, default: false },   // PF-5
   },
   
   investmentSummary: {
@@ -155,6 +156,7 @@ const payslipSchema = new mongoose.Schema({
       overtime:         { type: Number, default: 0 },
       bonus:            { type: Number, default: 0 },
       arrears:          { type: Number, default: 0 },
+      customComponentsTotal: { type: Number, default: 0 },   // PF-1
       totalEarnings:    { type: Number, default: 0 },
     },
     deductions: {

@@ -53,7 +53,9 @@ exports.runForTenant = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: `Payroll run complete. Processed: ${result.summary.processed}, Failed: ${result.summary.failed}`,
+      message: result.message || `Payroll run complete. Processed: ${result.summary.processed}, Failed: ${result.summary.failed}`,
+      // PF-3: frontend enables "Publish all" only when the whole run succeeded
+      finalizable: result.finalizable ?? failed === 0,
       data: result,
     });
   } catch (err) { next(err); }

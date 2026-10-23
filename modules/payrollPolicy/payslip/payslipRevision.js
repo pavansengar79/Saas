@@ -57,7 +57,9 @@ const applyPayslipRevision = (payslip, body = {}, userId) => {
   const earnings = { ...oldValues.earnings, ...earningChanges };
   const deductions = { ...oldValues.deductions, ...deductionChanges };
 
-  const grossSalary = round2(EARNING_FIELDS.reduce((sum, field) => sum + earnings[field], 0));
+  // PF-1: custom components are part of gross but are not edited here
+  const customTotal = (payslip.earnings?.customComponents || []).reduce((sum, item) => sum + (Number(item?.amount) || 0), 0);
+  const grossSalary = round2(EARNING_FIELDS.reduce((sum, field) => sum + earnings[field], 0) + customTotal);
   const grossAfterLOP = round2(grossSalary - deductions.lop);
   const netSalary = round2(grossAfterLOP
     - (deductions.pf + deductions.esi + deductions.tds + deductions.professionalTax + deductions.advance + deductions.other));

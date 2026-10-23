@@ -76,6 +76,10 @@ const renderPayslipPdf = payslip => new Promise((resolve, reject) => {
   addAmountRow(doc, "Travel allowance", payslip.earnings?.travelAllowance);
   addAmountRow(doc, "Medical allowance", payslip.earnings?.medicalAllowance);
   addAmountRow(doc, "Special allowance", payslip.earnings?.specialAllowance);
+  // PF-1: custom components (DA, food, internet …)
+  for (const item of payslip.earnings?.customComponents || []) {
+    if (Number(item?.amount) > 0) addAmountRow(doc, item.name || item.code || "Allowance", item.amount);
+  }
   addAmountRow(doc, `Overtime (${payslip.overtimeHours || 0} hrs x ${payslip.overtimeMultiplier || 0})`, payslip.earnings?.overtime);
   addAmountRow(doc, "Gross salary", payslip.grossSalary);
 

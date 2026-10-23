@@ -19,6 +19,8 @@ const {
   projectAnnualIncomeForTDS,
   calculateMonthlyTDS,
   getPriorFinancialYearPeriods,
+  summarizeCustomComponents,
+  isExitInPayrollMonth,
 } = require("./payrollRunRules");
 const Employee               = require("../employee/models/employee.model");
 const Attendance             = require("../attendance/models/attendance.model");
@@ -221,14 +223,17 @@ const calculateForEmployee = async (
   const travel = (salary?.travelAllowance  || 0) * earningsFactor;
   const medical= (salary?.medicalAllowance || 0) * earningsFactor;
   const special= (salary?.specialAllowance || 0) * earningsFactor;
+  // PF-1: custom components (DA, food, internet …) are part of salary too
+  const custom = summarizeCustomComponents(salary?.customComponents, earningsFactor);
 
   // ── LOP calculation using policy formula ──────────────────────
   // Policy lop config: enabled, calculation ("per_day"/"per_hour"), perDayFormula, roundingRule
   const lopConfig = policy?.lop || {};
-  const grossEarnings = basic + hra + travel + medical + special;
+  const grossEarnings = basic + hra + travel + medical + special + custom.earned;
   const monthlyGross = (salary?.basic || 0) + (salary?.hra || 0)
     + (salary?.travelAllowance || 0) + (salary?.medicalAllowance || 0)
-    + (salary?.specialAllowance || 0);
+    + (salary?.specialAllowance || 0)
+    + custom.monthly;
   
   // Get calendar days for the month
   const calendarDays = new Date(year, month, 0).getDate(); // e.g., 31 for July
@@ -314,7 +319,7 @@ const calculateForEmployee = async (
   att.overtimeHours = overtimeResult.hours;
 
   // ── Gross salary ─────────────────────────────────────────────
-  const grossBeforeLOP = parseFloat((basic + hra + travel + medical + special + overtimePay).toFixed(2));
+  const grossBeforeLOP = parseFloat((basic + hra + travel + medical + special + custom.earned + overtimePay).toFixed(2));
   const grossSalary    = parseFloat((grossBeforeLOP - lopDeduction).toFixed(2));
 
   // ── Statutory deductions ─────────────────────────────────────
@@ -335,6 +340,7 @@ const calculateForEmployee = async (
   } = calculateStatutoryDeductions({
     basic: payableBasic,
     fullBasic: salary.basic || 0,
+    customPfWages: custom.monthlyPf,   // PF-1: pfApplicable custom components
     grossSalary,
     standardGross: monthlyGross,
     taxCompliance: policy?.taxCompliance,
@@ -376,16 +382,28 @@ const calculateForEmployee = async (
           employee_id: employee._id,
           $or: priorPeriods,
           status: { $ne: "DRAFT" },
-        }).select("grossSalary grossAfterLOP deductions.lop deductions.tds").lean()
+        }).select("grossSalary grossAfterLOP deductions.lop deductions.tds earnings.customComponents").lean()
         : [];
-      const priorGross = priorPayslips.reduce((sum, p) => sum
-        + (p.grossAfterLOP > 0 ? p.grossAfterLOP : (p.grossSalary || 0) - (p.deductions?.lop || 0)), 0);
+      // PF-1: non-taxable custom components (taxable: false) stay out of TDS.
+      // They are reduced by LOP in the same proportion as the rest of gross.
+      const nonTaxableAfterLOP = (gross, grossAfterLop, items = []) => {
+        const nonTaxable = items.filter(item => item?.taxable === false)
+          .reduce((sum, item) => sum + (item.amount || 0), 0);
+        return gross > 0 ? nonTaxable * (grossAfterLop / gross) : 0;
+      };
+      const priorGross = priorPayslips.reduce((sum, p) => {
+        const paid = p.grossAfterLOP > 0 ? p.grossAfterLOP : (p.grossSalary || 0) - (p.deductions?.lop || 0);
+        return sum + paid - nonTaxableAfterLOP(p.grossSalary || 0, paid, p.earnings?.customComponents);
+      }, 0);
       const priorTDS = priorPayslips.reduce((sum, p) => sum + (p.deductions?.tds || 0), 0);
+      // PF-5: exit month → no future months in the projection, all remaining tax now
+      const isExitMonth = isExitInPayrollMonth(employee.exitDate, year, month, timezone);
       const { projectedAnnualGross, remainingMonths } = projectAnnualIncomeForTDS({
         month,
         priorGross,
-        currentGross: grossSalary,
-        monthlyGross,
+        currentGross: grossSalary - nonTaxableAfterLOP(grossBeforeLOP, grossSalary, custom.items),
+        monthlyGross: monthlyGross - custom.monthlyNonTaxable,
+        isExitMonth,
       });
       const taxableIncome = Math.max(0, projectedAnnualGross - (regime === 'new' ? NEW_REGIME_STANDARD_DEDUCTION : STANDARD_DEDUCTION)
         - (regime === 'old' ? totalExemption : 0));
@@ -399,7 +417,7 @@ const calculateForEmployee = async (
         ? calculateTDSNewRegime(taxableIncome)
         : calculateTDSOldRegime(taxableIncome, ageGroup);
       tds = calculateMonthlyTDS(tdsCalc.totalTax, priorTDS, remainingMonths);
-      taxBreakdown = { ...tdsCalc, projectedAnnualGross, remainingMonths, priorTDS };
+      taxBreakdown = { ...tdsCalc, projectedAnnualGross, remainingMonths, priorTDS, isExitMonth };
     } catch (err) {
       throw new AppError(`TDS calculation failed: ${err.message}`, 500);
     }
@@ -427,6 +445,7 @@ const calculateForEmployee = async (
       overtime: 0,
       bonus: 0,
       arrears: 0,
+      customComponentsTotal: 0,
       totalEarnings: 0,
     },
     deductions: {
@@ -449,6 +468,8 @@ const calculateForEmployee = async (
     ytd.earnings.overtime += slip.earnings?.overtime || 0;
     ytd.earnings.bonus += slip.earnings?.bonus || 0;
     ytd.earnings.arrears += slip.earnings?.arrears || 0;
+    ytd.earnings.customComponentsTotal += (slip.earnings?.customComponents || [])
+      .reduce((sum, item) => sum + (item.amount || 0), 0);
     
     ytd.deductions.pf += slip.deductions?.pf || 0;
     ytd.deductions.esi += slip.deductions?.esi || 0;
@@ -464,6 +485,7 @@ const calculateForEmployee = async (
   ytd.earnings.medicalAllowance += parseFloat(medical.toFixed(2));
   ytd.earnings.specialAllowance += parseFloat(special.toFixed(2));
   ytd.earnings.overtime += overtimePay;
+  ytd.earnings.customComponentsTotal += custom.earned;
   ytd.earnings.totalEarnings = Object.values(ytd.earnings).reduce((a, b) => a + b, 0);
   
   ytd.deductions.pf += pfEmployee;
@@ -483,6 +505,7 @@ const calculateForEmployee = async (
       overtime:         overtimePay,
       bonus:            0,
       arrears:          0,
+      customComponents: custom.items,   // PF-1: shown on the payslip and PDF
     },
     deductions: {
       pf:              pfEmployee,
@@ -536,6 +559,7 @@ const calculateForEmployee = async (
       projectedAnnualGross: taxBreakdown.projectedAnnualGross,
       remainingMonths: taxBreakdown.remainingMonths,
       priorTDS: taxBreakdown.priorTDS,
+      isExitMonth: taxBreakdown.isExitMonth,
     } : null,
     
     // Year-to-Date
@@ -763,9 +787,14 @@ exports.runForTenant = async (company_id, unit_id, month, createdBy, user) => {
     }
   }
 
+  // PF-3: only a run with no failures can be published as a whole
+  const finalizable = results.failed === 0;
   return {
     month,
     summary: results,
-    message: `Payroll run complete. Processed: ${results.processed}, Failed: ${results.failed}`,
+    finalizable,
+    message: finalizable
+      ? `Payroll run complete. Processed: ${results.processed}, Failed: 0`
+      : `Payroll run partial. Processed: ${results.processed}, Failed: ${results.failed}. Fix the failed employees before publishing.`,
   };
 };
