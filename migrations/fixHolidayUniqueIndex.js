@@ -9,11 +9,20 @@
  * Run: node migrations/fixHolidayUniqueIndex.js
  */
 
+const path = require('path');
 const mongoose = require('mongoose');
+
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+const MONGO_URI = process.env.MONGO_URI;
+if (!MONGO_URI) {
+  console.error('❌ MONGO_URI is not set. Add it to .env or the environment before running this migration.');
+  process.exit(1);
+}
 
 const runMigration = async () => {
   try {
-    await mongoose.connect('mongodb+srv://workprakhar9805_db_user:frPJmV3gDExUypUJ@cluster0.9m2axyw.mongodb.net/test');
+    await mongoose.connect(MONGO_URI);
     
     const db = mongoose.connection.db;
     const collection = db.collection('holidaycalendars');

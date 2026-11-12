@@ -7,12 +7,17 @@
  * Solution: Update MongoDB to match your test email domain.
  */
 
+const path = require('path');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 
-dotenv.config({ path: '.env' });
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://workprakhar9805_db_user:frPJmV3gDExUypUJ@cluster0.9m2axyw.mongodb.net/test?retryWrites=true&w=majority';
+const MONGO_URI = process.env.MONGO_URI;
+if (!MONGO_URI) {
+  console.error('❌ MONGO_URI is not set. Add it to .env or the environment before running this script.');
+  process.exit(1);
+}
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log('✅ Connected to MongoDB'))

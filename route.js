@@ -1,5 +1,6 @@
 // route.js
 
+const crypto  = require("crypto");
 const express = require("express");
 const router  = express.Router();
 
@@ -31,7 +32,6 @@ const { runAutoAbsentMarker } = require("./jobs/autoAbsentMarker.job");
 const { runShiftFinalization } = require("./jobs/shiftFinalization.job");
 const { expireOldDelegations } = require("./modules/delegation/delegation.service");
 const { runShiftSwapExpiry } = require("./jobs/shiftSwapExpiry.job");
-const { authenticate: authMiddleware } = require("./middlewares/auth.middleware");
 const attendancePolicyRoutes = require("./modules/attendancePolicy/attendancePolicy.routes");
 const payrollPolicyRoutes    = require("./modules/payrollPolicy/payrollPolicy.routes");
 const leavePolicyRoutes      = require("./modules/leavePolicy/leavePolicy.routes");
@@ -77,30 +77,37 @@ router.use("/audit-logs",          auditLogRoutes);
 router.use("/payroll-lock",         payrollLockRoutes);
 router.use("/notifications",        notificationRoutes);
 
-// Manual trigger for auto absent marker (Super Admin only)
-router.post("/admin/jobs/auto-absent", authMiddleware, async (req, res, next) => {
-  try {
-    if (req.user.role !== "SUPER_ADMIN") {
-      return res.status(403).json({ success: false, message: "Access denied" });
-    }
-    const result = await runAutoAbsentMarker();
-    res.json({ success: true, message: "Auto absent marker completed", data: result });
-  } catch (err) { next(err); }
-});
+// ─── Scheduled job triggers ───────────────────────────────────
+// Called by GitHub Actions (.github/workflows/scheduled-jobs.yml).
+// Auth: header "x-cron-secret" must equal process.env.CRON_SECRET.
+// A Super Admin token is NOT accepted here.
+const requireCronSecret = (req, res, next) => {
+  const expected = process.env.CRON_SECRET;
+  if (!expected) {
+    return res.status(503).json({ success: false, message: "CRON_SECRET is not configured on the server" });
+  }
+  const given = req.get("x-cron-secret") || "";
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ success: false, message: "Invalid cron secret" });
+  }
+  next();
+};
+
 const runAdminJob = (path, job) => {
-  router.post(path, authMiddleware, async (req, res, next) => {
+  router.post(path, requireCronSecret, async (req, res, next) => {
+    const startedAt = Date.now();
     try {
-      if (req.user.role !== "SUPER_ADMIN") {
-        return res.status(403).json({ success: false, message: "Access denied" });
-      }
       const result = await job();
-      res.json({ success: true, data: result });
+      res.json({ success: true, job: path, durationMs: Date.now() - startedAt, data: result });
     } catch (err) { next(err); }
   });
 };
-runAdminJob("/admin/jobs/shift-swap-expiry", runShiftSwapExpiry);
+runAdminJob("/admin/jobs/auto-absent",        runAutoAbsentMarker);
 runAdminJob("/admin/jobs/shift-finalization", () => runShiftFinalization(120));
-runAdminJob("/admin/jobs/delegation-expiry", expireOldDelegations);
+runAdminJob("/admin/jobs/shift-swap-expiry",  runShiftSwapExpiry);
+runAdminJob("/admin/jobs/delegation-expiry",  expireOldDelegations);
 router.use("/attendance-policies", attendancePolicyRoutes);
 router.use("/payroll-policies",    payrollPolicyRoutes);
 router.use("/leave-policies",      leavePolicyRoutes);

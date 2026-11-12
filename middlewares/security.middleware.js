@@ -7,9 +7,6 @@ const securityMiddleware = (app) => {
 
   // Security Headers
   app.use(helmet());
-//   app.use(mongoSanitize({
-//   replaceWith: "_"
-// }));
 
   // CORS Configuration
   app.use(
@@ -21,7 +18,22 @@ const securityMiddleware = (app) => {
   );
 
   // Prevent NoSQL Injection
-  // app.use(mongoSanitize());
+  // Rejects any request whose body/query/params contain keys starting with "$"
+  // (e.g. {"email":{"$gt":""}}). Uses has() instead of mongoSanitize() because
+  // mongoSanitize() reassigns req.query, which crashes every request on Express 5.
+  app.use((req, res, next) => {
+    const parts = { body: req.body, query: req.query, params: req.params };
+    for (const [where, value] of Object.entries(parts)) {
+      if (value && mongoSanitize.has(value, true)) {
+        return res.status(400).json({
+          status: "error",
+          statusCode: 400,
+          message: `Invalid characters in request ${where}`
+        });
+      }
+    }
+    next();
+  });
 
   // Prevent HTTP Parameter Pollution
   app.use(hpp());

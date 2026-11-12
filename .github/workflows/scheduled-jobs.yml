@@ -1,0 +1,76 @@
+# Scheduled backend jobs.
+# GitHub cron times are in UTC. IST = UTC + 5:30.
+# Needs 2 repository secrets (Settings → Secrets and variables → Actions):
+#   API_BASE_URL — live backend URL, e.g. https://your-backend.vercel.app (no /api/v1)
+#   CRON_SECRET  — same value as CRON_SECRET in the backend's Vercel env
+# Schedule is documented in README.md → "Scheduled jobs".
+
+name: Scheduled jobs
+
+on:
+  schedule:
+    - cron: "25 18 * * *"   # 23:55 IST daily  → auto-absent
+    - cron: "0 * * * *"     # every hour       → shift-finalization
+    - cron: "30 18 * * *"   # 00:00 IST daily  → shift-swap-expiry + delegation-expiry
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job to run now"
+        required: true
+        type: choice
+        options:
+          - auto-absent
+          - shift-finalization
+          - shift-swap-expiry
+          - delegation-expiry
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call job endpoint(s)
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          CRON_SECRET:  ${{ secrets.CRON_SECRET }}
+          EVENT:        ${{ github.event_name }}
+          SCHEDULE:     ${{ github.event.schedule }}
+          MANUAL_JOB:   ${{ inputs.job }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Secrets API_BASE_URL and CRON_SECRET must be set in repo settings"
+            exit 1
+          fi
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            JOBS="$MANUAL_JOB"
+          else
+            case "$SCHEDULE" in
+              "25 18 * * *") JOBS="auto-absent" ;;
+              "0 * * * *")   JOBS="shift-finalization" ;;
+              "30 18 * * *") JOBS="shift-swap-expiry delegation-expiry" ;;
+              *) echo "::error::Unknown schedule: $SCHEDULE"; exit 1 ;;
+            esac
+          fi
+
+          FAILED=0
+          for JOB in $JOBS; do
+            URL="${API_BASE_URL%/}/api/v1/admin/jobs/$JOB"
+            echo "→ POST /api/v1/admin/jobs/$JOB"
+            CODE=$(curl -sS -o response.json -w "%{http_code}" --max-time 300 \
+              -X POST "$URL" -H "x-cron-secret: $CRON_SECRET") || CODE="000"
+            cat response.json 2>/dev/null || true
+            echo
+            if [ "$CODE" != "200" ]; then
+              echo "::error::$JOB failed with HTTP $CODE"
+              FAILED=1
+            else
+              echo "✓ $JOB OK"
+            fi
+          done
+          exit $FAILED

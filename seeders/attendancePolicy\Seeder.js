@@ -1,4 +1,4 @@
-// seeders/attendancePolicy.Seeder.js
+﻿// seeders/attendancePolicy.Seeder.js
 // Creates default attendance policy if none exists
 // Ensures employees can punch in/out even before HR creates custom policies
 
@@ -19,7 +19,7 @@ exports.seedDefaultAttendancePolicy = async () => {
     });
 
     if (existingPolicy) {
-      console.log(`[ATTENDANCE POLICY SEEDER] ✓ Company ${company._id} already has active policy: "${existingPolicy.name}"`);
+      console.log(`[ATTENDANCE POLICY SEEDER] Γ£ô Company ${company._id} already has active policy: "${existingPolicy.name}"`);
       continue;
     }
 
@@ -70,10 +70,10 @@ exports.seedDefaultAttendancePolicy = async () => {
       updatedBy: null,
     });
 
-    console.log(`[ATTENDANCE POLICY SEEDER] ✅ Created default policy "${defaultPolicy.name}" for company ${company._id}`);
+    console.log(`[ATTENDANCE POLICY SEEDER] Γ£à Created default policy "${defaultPolicy.name}" for company ${company._id}`);
   }
 
-  console.log("[ATTENDANCE POLICY SEEDER] ✓ All companies have attendance policies");
+  console.log("[ATTENDANCE POLICY SEEDER] Γ£ô All companies have attendance policies");
 };
 
 // Run if called directly
@@ -84,12 +84,12 @@ if (require.main === module) {
   mongoose
     .connect(process.env.MONGODB_URI)
     .then(async () => {
-      console.log("📦 Connected to MongoDB");
+      console.log("≡ƒôª Connected to MongoDB");
       await exports.seedDefaultAttendancePolicy();
       process.exit(0);
     })
     .catch((err) => {
-      console.error("❌ MongoDB connection error:", err);
+      console.error("Γ¥î MongoDB connection error:", err);
       process.exit(1);
     });
 }

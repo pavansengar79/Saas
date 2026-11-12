@@ -7,11 +7,8 @@ const router     = express.Router();
 const controller = require("./tenant.controller");
 const { authenticate }   = require("../../middlewares/auth.middleware");
 const { authorizeRoles } = require("../../middlewares/role.middleware");
-const validate           = require("../../middlewares/validate.middleware");
-const { registerOrgSchema } = require("./tenant.validation");
 
-// ─── Public ───────────────────────────────────────────────────
-router.post("/register", validate(registerOrgSchema), controller.registerOrg);
+
 
 // ─── Super Admin (Product Admin) only ─────────────────────────
 router.get(   "/",    authenticate, authorizeRoles("SUPER_ADMIN"), controller.getCustomers);

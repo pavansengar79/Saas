@@ -120,8 +120,21 @@ const resolveProfessionalTaxState = ({ policyState, unitState, companyState, emp
   return state ? state.trim().toUpperCase() : null;
 };
 
+// ── Statutory EPF wage ceiling ─────────────────────────────────────────────
+// Code on Social Security, 2020 — Section 2(89), for Chapter III.
+// ₹15,000: S.O. 2702(E), 29 May 2026 (superseded).
+// ₹25,000: S.O. 5109(E), Gazette of India (Extraordinary), 17 Sep 2026;
+//          in force from publication, i.e. 17 Sep 2026.
+// Official confirmation (Ministry of Labour & Employment / PIB):
+//   https://www.labour.gov.in/static/uploads/2026/09/4f607a88c5342aeb980c6b999997caab.pdf  (16 Sep 2026)
+//   https://www.pib.gov.in/PressReleasePage.aspx?PRID=2313790                                (23 Sep 2026)
+// NOT yet verified (12 Nov 2026): direct egazette.gov.in link and an EPFO circular number.
+//   To add: search "S.O. 5109(E)" on https://egazette.gov.in and EPFO circulars on
+//   https://www.epfindia.gov.in/site_en/Circulars.php
+// Open question for CA: G.S.R. 890(E), 15 Oct 2026 (EPS para 4(2), ₹15,000) — reported by one
+//   source only. Code below applies EPS 8.33% on wages up to ₹25,000.
 const EPF_CEILING_OLD = 15000;
-const EPF_CEILING_NEW = 25000; // S.O. 5109(E), effective 17 Sep 2026
+const EPF_CEILING_NEW = 25000;
 
 /**
  * P0-5: statutory EPF wage ceiling for a payroll month.
