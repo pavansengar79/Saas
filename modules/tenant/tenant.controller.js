@@ -5,7 +5,7 @@
 // registerOrg() is the only public endpoint.
 // Super Admin CRUD now operates on Customer documents.
 
-const tenantService = require("./tenant.service");
+const tenantService = require("./tenant.service");  
 
 // POST /tenant/register  — public
 exports.registerOrg = async (req, res, next) => {
