@@ -5,6 +5,7 @@ const test = require("node:test");
 const {
   assertPayrollRunDateReached,
   calculateOvertimePay,
+  getCompOffOvertimeHours,
   calculatePayrollEligibility,
   assertPayslipCanBeRecalculated,
   resolveProfessionalTaxState,
@@ -403,4 +404,25 @@ test("P0-6 EPS is zero at 58+ and the full 12% goes to EPF", () => {
   });
   assert.equal(result.pfEmployerBreakup.eps, 0);
   assert.equal(result.pfEmployerBreakup.epf, 3000);
+});
+
+test("#12: comp-off overtime hours are kept for the payslip; salary or disabled overtime gives 0", () => {
+  assert.equal(getCompOffOvertimeHours({ detectedHours: 6.5, attendanceOvertime: { enabled: true, compensationType: "comp_off" } }), 6.5);
+  assert.equal(getCompOffOvertimeHours({ detectedHours: 6.5, attendanceOvertime: { enabled: true } }), 6.5);
+  assert.equal(getCompOffOvertimeHours({ detectedHours: 6.5, attendanceOvertime: { enabled: true, compensationType: "salary" } }), 0);
+  assert.equal(getCompOffOvertimeHours({ detectedHours: 6.5, attendanceOvertime: { enabled: false, compensationType: "comp_off" } }), 0);
+  assert.equal(getCompOffOvertimeHours({ detectedHours: 0, attendanceOvertime: { enabled: true, compensationType: "comp_off" } }), 0);
+});
+
+test("PF-2: PT slab uses standard monthly gross, not LOP-reduced gross", () => {
+  // KA: ₹26,000 standard gross, 2 LOP days → earned ₹24,267. Slab must follow ₹26,000.
+  const result = calculateStatutoryDeductions({
+    basic: 13000,
+    grossSalary: 24267,
+    standardGross: 26000,
+    ptState: "KA",
+    taxCompliance: { pfEnabled: false, esiEnabled: false, ptEnabled: true },
+  });
+
+  assert.equal(result.professionalTax, 200);
 });

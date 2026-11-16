@@ -102,6 +102,7 @@ const payslipSchema = new mongoose.Schema({
   lopDays:           { type: Number, default: 0 },
   daysPayable:       { type: Number },
   overtimeHours:     { type: Number, default: 0 },
+  compOffOvertimeHours: { type: Number, default: 0 },  // #12: overtime given as comp-off (not paid)
   
   // LOP calculation details (for transparency in payslip)
   lopPerDayRate:     { type: Number, default: 0 },  // Actual per-day rate used for LOP deduction

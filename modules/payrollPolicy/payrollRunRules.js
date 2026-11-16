@@ -217,8 +217,9 @@ const calculateStatutoryDeductions = ({
     ? round2(grossSalary * ((taxCompliance.esiEmployerRate ?? 3.25) / 100))
     : 0;
 
+  // PF-2: the PT slab follows the standard monthly gross, not the LOP-reduced gross
   const professionalTax = taxCompliance.ptEnabled === true && ptState
-    ? calculatePT(ptState, grossSalary)
+    ? calculatePT(ptState, standardGross)
     : 0;
 
   return { pfEmployee, pfEmployer, pfEmployerBreakup, pfCeiling, esiEmployee, esiEmployer, professionalTax };
@@ -378,6 +379,19 @@ const calculateOvertimePay = ({
 };
 
 /**
+ * #12: overtime hours that are compensated as comp-off instead of being paid.
+ * Attendance detects overtime for both "salary" and "comp_off"; payroll pays only
+ * "salary" (see calculateOvertimePay). These hours are shown on the payslip so the
+ * employee does not see "0 hrs, Rs 0". Comp-off leave is NOT credited here.
+ * @returns {number} hours (0 when overtime is off or paid as salary)
+ */
+const getCompOffOvertimeHours = ({ detectedHours, attendanceOvertime }) => {
+  if (!attendanceOvertime?.enabled) return 0;
+  if (attendanceOvertime.compensationType === "salary") return 0;
+  return Number(Math.max(0, Number(detectedHours) || 0).toFixed(2));
+};
+
+/**
  * PF-1: custom salary components (DA, food, internet …) for one payroll month.
  * Amounts are prorated with the same earnings factor as basic / HRA.
  * @param {Array} components employee.salary.customComponents
@@ -434,6 +448,7 @@ module.exports = {
   isExitInPayrollMonth,
   assertPayrollRunDateReached,
   calculateOvertimePay,
+  getCompOffOvertimeHours,
   calculatePayrollEligibility,
   assertPayslipCanBeRecalculated,
   resolveProfessionalTaxState,
