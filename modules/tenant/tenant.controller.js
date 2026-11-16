@@ -21,6 +21,7 @@ exports.registerOrg = async (req, res, next) => {
   }
 };
 
+
 // Super Admin — list all customers
 exports.getCustomers = async (req, res, next) => {
   try {
