@@ -19,6 +19,19 @@ const addAmountRow = (doc, label, amount) => {
   doc.text(`Rs. ${Number(amount || 0).toFixed(2)}`, 340, y, { width: 180, align: "right" });
 };
 
+// #12: paid overtime row, comp-off overtime row, or no row at all
+const getOvertimeRow = (payslip) => {
+  const paid = Number(payslip.earnings?.overtime) || 0;
+  if (paid > 0) {
+    return { label: `Overtime (${payslip.overtimeHours || 0} hrs x ${payslip.overtimeMultiplier || 0})`, amount: paid };
+  }
+  const compOffHours = Number(payslip.compOffOvertimeHours) || 0;
+  if (compOffHours > 0) {
+    return { label: `Overtime ${compOffHours} hrs: compensated as comp-off`, amount: 0 };
+  }
+  return null;
+};
+
 const addSectionTitle = (doc, title) => {
   doc.moveDown(0.8).font("Helvetica-Bold").fontSize(11).text(title);
   doc.moveTo(72, doc.y + 2).lineTo(540, doc.y + 2).strokeColor("#C7CDD4").stroke();
@@ -80,7 +93,8 @@ const renderPayslipPdf = payslip => new Promise((resolve, reject) => {
   for (const item of payslip.earnings?.customComponents || []) {
     if (Number(item?.amount) > 0) addAmountRow(doc, item.name || item.code || "Allowance", item.amount);
   }
-  addAmountRow(doc, `Overtime (${payslip.overtimeHours || 0} hrs x ${payslip.overtimeMultiplier || 0})`, payslip.earnings?.overtime);
+  const overtimeRow = getOvertimeRow(payslip);
+  if (overtimeRow) addAmountRow(doc, overtimeRow.label, overtimeRow.amount);
   addAmountRow(doc, "Gross salary", payslip.grossSalary);
 
   addSectionTitle(doc, "DEDUCTIONS");
@@ -151,3 +165,4 @@ exports.generatePayslipPdf = async (payslipId, user) => {
 };
 
 exports.renderPayslipPdf = renderPayslipPdf;
+exports.getOvertimeRow = getOvertimeRow;

@@ -11,9 +11,9 @@
  */
 const OLD_REGIME_SLABS = [
   { min: 0, max: 250000, rate: 0 },
-  { min: 250001, max: 500000, rate: 5 },
-  { min: 500001, max: 1000000, rate: 20 },
-  { min: 1000001, max: null, rate: 30 },
+  { min: 250000, max: 500000, rate: 5 },
+  { min: 500000, max: 1000000, rate: 20 },
+  { min: 1000000, max: null, rate: 30 },
 ];
 
 /**
@@ -21,9 +21,9 @@ const OLD_REGIME_SLABS = [
  */
 const OLD_REGIME_SLABS_SENIOR = [
   { min: 0, max: 300000, rate: 0 },
-  { min: 300001, max: 500000, rate: 5 },
-  { min: 500001, max: 1000000, rate: 20 },
-  { min: 1000001, max: null, rate: 30 },
+  { min: 300000, max: 500000, rate: 5 },
+  { min: 500000, max: 1000000, rate: 20 },
+  { min: 1000000, max: null, rate: 30 },
 ];
 
 /**
@@ -31,8 +31,8 @@ const OLD_REGIME_SLABS_SENIOR = [
  */
 const OLD_REGIME_SLABS_SUPER_SENIOR = [
   { min: 0, max: 500000, rate: 0 },
-  { min: 500001, max: 1000000, rate: 20 },
-  { min: 1000001, max: null, rate: 30 },
+  { min: 500000, max: 1000000, rate: 20 },
+  { min: 1000000, max: null, rate: 30 },
 ];
 
 /**

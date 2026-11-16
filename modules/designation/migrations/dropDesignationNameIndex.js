@@ -8,7 +8,15 @@ module.exports = async function migrateDesignationIndexes() {
 
   const collection = db.collection('designations');
 
-  const indexes = await collection.indexes();
+  // A new/empty database has no "designations" collection yet: listing its
+  // indexes fails with NamespaceNotFound (code 26). Nothing to drop then —
+  // createIndex below creates the collection and the index.
+  let indexes = [];
+  try {
+    indexes = await collection.indexes();
+  } catch (err) {
+    if (err?.code !== 26 && err?.codeName !== 'NamespaceNotFound') throw err;
+  }
   for (const index of indexes) {
     const fields = Object.keys(index.key);
     const isLegacyUnitIndex = fields.includes('unit_id') &&

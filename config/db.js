@@ -82,7 +82,13 @@ const connectDB = async () => {
       bufferCommands: false,          // fail fast instead of buffering silently for 10s
       serverSelectionTimeoutMS: 10000,
     }).then(async (m) => {
-      await migrateDesignationIndexes();
+      // An index migration must never block the connection (every request
+      // waits on connectDB, so a throw here turned every API call into a 500).
+      try {
+        await migrateDesignationIndexes();
+      } catch (err) {
+        console.error('⚠️  [Migration] designation indexes skipped:', err.message);
+      }
       console.log('✅ MongoDB connected');
       return m;
     }).catch((error) => {

@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { renderPayslipPdf } = require("./payslipPdf.service");
+const { renderPayslipPdf, getOvertimeRow } = require("./payslipPdf.service");
 
 test("renders a standards-compliant payslip PDF", async () => {
   const buffer = await renderPayslipPdf({
@@ -48,4 +48,29 @@ test("PF-1 payslip PDF lists custom components", async () => {
     grossSalary: 28000, grossAfterLOP: 28000, netSalary: 25000,
   });
   assert.ok(text.length > without.toString("latin1").length);
+});
+
+test("#12: payslip overtime row shows paid OT, comp-off OT, or nothing", () => {
+  assert.deepEqual(
+    getOvertimeRow({ earnings: { overtime: 2000 }, overtimeHours: 10, overtimeMultiplier: 2 }),
+    { label: "Overtime (10 hrs x 2)", amount: 2000 },
+  );
+  assert.deepEqual(
+    getOvertimeRow({ earnings: { overtime: 0 }, compOffOvertimeHours: 6.5 }),
+    { label: "Overtime 6.5 hrs: compensated as comp-off", amount: 0 },
+  );
+  assert.equal(getOvertimeRow({ earnings: { overtime: 0 }, overtimeHours: 0 }), null);
+  assert.equal(getOvertimeRow({ earnings: {} }), null);
+});
+
+test("#12: payslip PDF with comp-off overtime still renders", async () => {
+  const buffer = await renderPayslipPdf({
+    month: 10, year: 2026, status: "PUBLISHED",
+    employee_id: { name: "Test Employee", employeeId: "EMP-1", email: "employee@example.com" },
+    earnings: { basic: 20000, hra: 8000, overtime: 0 },
+    deductions: { pf: 3000, esi: 0, tds: 0, lop: 0 },
+    compOffOvertimeHours: 6.5,
+    grossSalary: 28000, grossAfterLOP: 28000, netSalary: 25000,
+  });
+  assert.equal(buffer.subarray(0, 5).toString(), "%PDF-");
 });

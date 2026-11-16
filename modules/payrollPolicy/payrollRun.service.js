@@ -10,6 +10,7 @@ const { resolveAttendancePolicy, resolvePayrollPolicy } = require("../../utils/p
 const {
   assertPayrollRunDateReached,
   calculateOvertimePay,
+  getCompOffOvertimeHours,
   calculatePayrollEligibility,
   assertPayslipCanBeRecalculated,
   resolveProfessionalTaxState,
@@ -316,6 +317,11 @@ const calculateForEmployee = async (
   const overtimeMultiplier = overtimeResult.multiplier;
   const overtimeRate = overtimeResult.rate;
   const overtimePay = overtimeResult.amount;
+  // #12: keep the detected hours that are given as comp-off (they are not paid)
+  const compOffOvertimeHours = getCompOffOvertimeHours({
+    detectedHours: att.overtimeHours || 0,
+    attendanceOvertime: attendancePolicy.overtime,
+  });
   att.overtimeHours = overtimeResult.hours;
 
   // ── Gross salary ─────────────────────────────────────────────
@@ -528,6 +534,7 @@ const calculateForEmployee = async (
     lopDays:           parseFloat(lopDays.toFixed(2)),
     daysPayable:       parseFloat(daysPayable.toFixed(2)),
     overtimeHours:     parseFloat((att.overtimeHours || 0).toFixed(2)),
+    compOffOvertimeHours,   // #12: overtime given as comp-off, not paid
     
     // LOP calculation details for payslip display
     lopPerDayRate:     parseFloat((isHourlyLOP ? hourlyRate * standardHours : dailySalary).toFixed(2)),
