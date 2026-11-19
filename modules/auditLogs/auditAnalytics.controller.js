@@ -17,6 +17,10 @@ exports.executeQuery = async (req, res, next) => {
       return next(new AppError('Query is required', 400));
     }
 
+    if (!geminiService.isConfigured) {
+      return next(new AppError('AI audit analytics is not configured on this server', 503));
+    }
+
     // Build context from authenticated user
     const context = {
       orgId: req.user.orgId,

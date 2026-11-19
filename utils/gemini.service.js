@@ -4,15 +4,27 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 class GeminiService {
+  // Gemini is optional: without GOOGLE_GENERATIVE_AI_API_KEY the server still
+  // starts, and only AI audit analytics is unavailable (controller returns 503).
   constructor() {
-    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    this.model = null;
+  }
+
+  get isConfigured() {
+    return Boolean(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+  }
+
+  getModel() {
+    if (!this.isConfigured) {
       throw new Error('GOOGLE_GENERATIVE_AI_API_KEY is not configured');
     }
-
-    this.genAI = new GoogleGenerativeAI(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-    this.model = this.genAI.getGenerativeModel({ 
-      model: process.env.GEMINI_MODEL || 'gemini-1.5-flash' 
-    });
+    if (!this.model) {
+      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+      this.model = genAI.getGenerativeModel({
+        model: process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+      });
+    }
+    return this.model;
   }
 
   /**
@@ -68,7 +80,7 @@ Response: [{"$match":{"action":"LOGIN_FAILED"}},{"$lookup":{"from":"users","loca
 Now generate aggregation pipeline for this query: ${userQuery}`;
 
     try {
-      const result = await this.model.generateContent({
+      const result = await this.getModel().generateContent({
         contents: [{
           role: 'user',
           parts: [{ text: systemPrompt }]
@@ -127,7 +139,7 @@ Pipeline: ${JSON.stringify(pipeline, null, 2)}
 Keep it simple and user-friendly. No technical jargon.`;
 
     try {
-      const result = await this.model.generateContent({
+      const result = await this.getModel().generateContent({
         contents: [{
           role: 'user',
           parts: [{ text: prompt }]
@@ -193,7 +205,7 @@ Focus on:
 Keep it concise and professional.`;
 
     try {
-      const result = await this.model.generateContent({
+      const result = await this.getModel().generateContent({
         contents: [{
           role: 'user',
           parts: [{ text: prompt }]
@@ -223,7 +235,7 @@ Return ONLY a JSON array of 3 strings, no other text.
 Example: ["Show failed logins this week", "Count logins by location", "List unauthorized access attempts"]`;
 
     try {
-      const result = await this.model.generateContent({
+      const result = await this.getModel().generateContent({
         contents: [{
           role: 'user',
           parts: [{ text: prompt }]
