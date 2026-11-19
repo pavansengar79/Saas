@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-Node.js 20.19+ or 22+ (verify with the lockfile and deployment runtime), npm, and a reachable MongoDB instance. Clone the backend from `https://github.com/prakharChaudhary-beno/Saas.git` on the agreed release branch. The `package.json` repository field points to another URL and must be reconciled by the owner.
+Node.js 22+ (needed for `npm test`), npm, and a reachable MongoDB instance. The one backend repository is `https://github.com/pavansengar79/Saas` (branch `main`). Old copies (`pavansengar79/HRMS-BE`, `prakharChaudhary-beno/Saas`) are retired; do not push to them.
 
 ```sh
-git clone https://github.com/prakharChaudhary-beno/Saas.git hrms-backend
+git clone https://github.com/pavansengar79/Saas.git hrms-backend
 cd hrms-backend
 npm install
 cp .env.example .env
@@ -37,4 +37,4 @@ Standalone root `test-*.js`, `debug-*.js`, `check-*.js`, `seed-*.js` and similar
   - PIB, 23 Sep 2026: https://www.pib.gov.in/PressReleasePage.aspx?PRID=2313790
 - **Not verified as of 12 Nov 2026:** a direct egazette.gov.in link for S.O. 5109(E), and any EPFO circular number. Add them here and in the code comment when found.
 - **September 2026:** prorated by default (16 days at ₹15,000, 14 days at ₹25,000). Set `taxCompliance.pfSep2026Transition = "full"` to use ₹25,000 for the whole month. Confirm with the CA.
-- **Open question for the CA:** G.S.R. 890(E), 15 Oct 2026 (EPS para 4(2), ₹15,000) is reported by one source only. The code applies employer EPS 8.33% on wages up to ₹25,000.
+- **Open question for the CA:** G.S.R. 890(E), 15 Oct 2026 (EPS para 4(2), ₹15,000) is reported by one source only. The code applies employer EPS 8.33% on wages up to ₹25,000.node -e "require('./package.json'); console.log('package.json ok')"

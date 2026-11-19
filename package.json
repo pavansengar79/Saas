@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "",
   "main": "app.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test \"**/*.test.js\"",
     "start": "node server.js",
@@ -12,14 +15,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pavansengar79/HRMS-BE.git"
+    "url": "git+https://github.com/pavansengar79/Saas.git"
   },
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/pavansengar79/HRMS-BE/issues"
+    "url": "https://github.com/pavansengar79/Saas/issues"
   },
-  "homepage": "https://github.com/pavansengar79/HRMS-BE#readme",
+  "homepage": "https://github.com/pavansengar79/Saas#readme",
   "devDependencies": {
     "nodemon": "^3.1.14"
   },
