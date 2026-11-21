@@ -3,15 +3,41 @@ const cors = require("cors");
 const mongoSanitize = require("express-mongo-sanitize");
 const hpp = require("hpp");
 
+const toOrigin = value => {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.origin : null;
+  } catch {
+    return null;
+  }
+};
+
+const getAllowedOrigins = () => [
+  process.env.FRONTEND_URL,
+  ...(process.env.FRONTEND_URLS || "").split(","),
+  process.env.GOOGLE_FRONTEND_REDIRECT_URI
+].map(value => toOrigin(value?.trim())).filter(Boolean)
+  .filter((origin, i, list) => list.indexOf(origin) === i);
+
 const securityMiddleware = (app) => {
 
   // Security Headers
   app.use(helmet());
 
   // CORS Configuration
+  // Only the frontend URL(s) from the environment may call the API from a browser:
+  // FRONTEND_URL, FRONTEND_URLS (comma-separated) and GOOGLE_FRONTEND_REDIRECT_URI.
+  // Requests with no Origin header (server-to-server, cron, curl, devices) are allowed.
+  const allowedOrigins = getAllowedOrigins();
+  if (allowedOrigins.length === 0) {
+    console.warn("[CORS] No FRONTEND_URL / FRONTEND_URLS set: browser requests from other sites will be blocked");
+  }
   app.use(
     cors({
-      origin: "*", // Add the frontend domain later
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(null, false);
+      },
       methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
       credentials: true
     })
@@ -41,3 +67,4 @@ const securityMiddleware = (app) => {
 };
 
 module.exports = securityMiddleware;
+module.exports.getAllowedOrigins = getAllowedOrigins;
